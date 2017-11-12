@@ -49,8 +49,12 @@
 
 /*
    TO DO
-   @ident & switch case for joint identification
-   @commanded_joint_positions method
+   1/2 - @ident & switch case for joint identification
+   doesn't work - @commanded_joint_positions method
+   @test simple, 4x command terminals BR_cmd, SL_cmd etc.
+   @experiment with JointTrajectoryPoint
+      .cpp to read a line tped in terminal, then publish
+      this program subscribes, then acts on JTP
    @test pub/sub 4X Arduinos on USB hub
    @lookup table for 100 rows for accel created from .xls Lieb Ramp
 */
@@ -59,7 +63,7 @@
 #include <ArduinoHardware.h>
 #include <std_msgs/String.h>
 #include <std_msgs/Float32.h>
-
+#include <trajectory_msgs/JointTrajectoryPoint.h>
 
 //states
 enum {UNPOWERED, HOLDING_POSITION, MOVING, FINAL_APPROACH, CW_ENDSTOP_ACTIVATED, CCW_ENDSTOP_ACTIVATED, CALIBRATING } running_state;
@@ -70,6 +74,8 @@ bool new_plan = false;
 
 //debug messages
 char miscMsgs[20];
+char miscMsgs2[20];
+char inbound_message[40];
 
 //internal position and direction variables
 volatile long encoder_1_pos = 0;  //position of doe in encoder clicks
@@ -123,6 +129,7 @@ std_msgs::Float32 stepper_count_pos; //Equivalent joint position in +/- degrees,
 std_msgs::Float32 stepper_encoder_pos; //Equivalent joint position in +/- degrees, to three decimal places.
 std_msgs::Float32 torque;  ////torque joint rotation in +/- degrees, to three decimal places. std_msgs/Float32.
 std_msgs::String state; //may be in multiple states simultaneously
+trajectory_msgs::JointTrajectoryPoint jtp;
 
 //endstop pins
 const int CW_ENDSTOP_PIN = 16;  //TO DO UPDATE TO CORRECT PIN!
@@ -160,21 +167,65 @@ ros::NodeHandle  nh;
 //added this next line to increase size of sub and pub buffers. Defaults were 512bytes. Ref: https://github.com/tonybaltovski/ros_arduino/issues/10
 //ros::NodeHandle_<ArduinoHardware, 2, 10, 4096, 4096> nh;//this uses too much dynamic memory for Mega
 
+////loop timing variables
+volatile unsigned long next_update = 0;//used to time loop updates
+const unsigned long UPDATE_INTERVAL = 1000;//in milliseconds
+
+//debug stuff
+float test_var = 56.66;
+
 //subscriber call backs
-void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
+void commandedPositionCallback(const std_msgs::Float32& the_command_msg_) {
+  //action to be taken when msg received on topic BR_cmd. SL_cmd, etc
+  static float previous_commanded_position_;
+  float the_commanded_position_ = the_command_msg_.data;
+
+  /*
+    check for special commands. Normal range of commands is +/- 179.999 degrees,
+    therefore anything outside of that range is considered a special command
+    commanded_position ~=400 -> means set all values to zero
+  */
+  if (the_commanded_position_ > -359.99 && the_commanded_position_ < 359.99) {
+    //this is a regular command
+    //record commanded position as a global
+    commanded_position = the_command_msg_.data;
+
+    //check this is not a repeated command to the same position
+    if (commanded_position != previous_commanded_position_) {
+      //this is a new command. Plan and execute motion
+      //set previous commanded position
+      previous_commanded_position_ = commanded_position;
+      //set flag
+      new_plan = true;
+    }
+  }
+}//end commandedPositionCallback()
+
+void commandedJointPositionsCallback(const std_msgs::String & the_command_msg_) {
   //action to be taken when msg received on topic commanded_joint_positions
-  float joint_commands_[5];//array holdein commanded position in degrees in order: BR,SL,UR,EL,LR
+  float joint_commands_[5];//array holding commanded position in degrees in order: BR,SL,UR,EL,LR
 
   //parse command
-  char inbound_message_ = the_command_msg_.data;//this works
+  inbound_message[0] = (char)0;  //"empties inbound_message by setting first char in string to 0
+  strcat(inbound_message, the_command_msg_.data);//this finally works
 
   //debug only
   nh.loginfo("InbdMsg=");
-  nh.loginfo(inbound_message_);
+  nh.loginfo(inbound_message);//this now works
+
+  //load state.data for eventual publishing by updateStatus()
+  miscMsgs2[0] = (char)0;  //"empties msg by setting first char in string to 0
+  strcat(miscMsgs2, inbound_message);
+  state.data = miscMsgs2;
 
   //get first token and convert to float for BR commanded position
-  char* command = strtok(inbound_message_, ",");
+  char* command = strtok(inbound_message, ",");
   joint_commands_[0] = atof(command);
+
+  //debug pub to state topic - this all works
+//  miscMsgs2[0] = (char)0;  //"empties msg by setting first char in string to 0
+//  strcat(miscMsgs2, command);
+//  state.data = miscMsgs2;
 
   int joint_index = 1;//note starts at 1 because BR joint has already been parsed as j0int_index=0
   while (command != 0)
@@ -184,15 +235,16 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
     joint_index++;
   }
 
-  //apply command
-
   //apply to only this joint
   switch (minion_ident) {
     case SL_IDENT:
       joint_index = 1;
       commanded_position = joint_commands_[joint_index];
       sprintf(miscMsgs, "SL cmd %3.2f", commanded_position);
+      //      sprintf(miscMsgs, "SL cmd2 % f", test_var);
       nh.loginfo(miscMsgs);
+      torque.data = joint_commands_[joint_index];
+      //torque.data = 5.76;
       break;
     case UR_IDENT:
       joint_index = 2;
@@ -215,8 +267,6 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
     default:
       break;
   }//end switch case
-
-
 
 }// end commandedPositionCallback()
 
@@ -256,7 +306,48 @@ ros::Publisher LR_torque_pub("LR_torque", &torque);       //BR joint rotation in
 //ros::Publisher BR_joint_state_pub("BR_joint_state", &BR_joint_state);  //sensor_msgs/JointState
 ros::Publisher LR_state_pub("LR_state", &state);        //std_msgs/String. States such cw_endstop_activated, holding_position, moving, unpowered, yellow_torque, red_torque
 
-
+void updateStatus() {
+  //publish stuff for this joint
+  torque.data = commanded_position;
+  SL_torque_pub.publish( &torque );
+  SL_state_pub.publish( &state );
+  switch (minion_ident) {
+    case SL_IDENT:
+      SL_joint_encoder_pos_pub.publish( &joint_encoder_pos );
+      SL_stepper_count_pos_pub.publish( &stepper_count_pos );
+      SL_stepper_encoder_pos_pub.publish( &stepper_encoder_pos );
+      SL_torque_pub.publish( &torque );
+      //      SL_joint_state_pub.publish( &BR_joint_state );
+      SL_state_pub.publish( &state );
+      break;
+    case UR_IDENT:
+      UR_joint_encoder_pos_pub.publish( &joint_encoder_pos );
+      UR_stepper_count_pos_pub.publish( &stepper_count_pos );
+      UR_stepper_encoder_pos_pub.publish( &stepper_encoder_pos );
+      UR_torque_pub.publish( &torque );
+      //      UR_joint_state_pub.publish( &BR_joint_state );
+      UR_state_pub.publish( &state );
+      break;
+    case EL_IDENT:
+      EL_joint_encoder_pos_pub.publish( &joint_encoder_pos );
+      EL_stepper_count_pos_pub.publish( &stepper_count_pos );
+      EL_stepper_encoder_pos_pub.publish( &stepper_encoder_pos );
+      EL_torque_pub.publish( &torque );
+      //      EL_joint_state_pub.publish( &BR_joint_state );
+      EL_state_pub.publish( &state );
+      break;
+    case LR_IDENT:
+      LR_joint_encoder_pos_pub.publish( &joint_encoder_pos );
+      LR_stepper_count_pos_pub.publish( &stepper_count_pos );
+      LR_stepper_encoder_pos_pub.publish( &stepper_encoder_pos );
+      LR_torque_pub.publish( &torque );
+      //      LR_joint_state_pub.publish( &BR_joint_state );
+      LR_state_pub.publish( &state );
+      break;
+    default:
+      break;
+  }//end switch case
+}//end updateStatus()
 
 void setup() {
   // setup, then read, minion identification pins
@@ -315,17 +406,30 @@ void setup() {
       nh.advertise(LR_stepper_encoder_pos_pub);
       nh.advertise(LR_torque_pub);
       nh.advertise(LR_state_pub);
-      //      nh.subscribe(LR_plan_sub);
+      //      nh.sscribe(LR_plan_sub);
       nh.loginfo("SetupLR");
       break;
     default:
       break;
   }//end switch case
 
+  nh.loginfo("V0.0.16");
+
   nh.spinOnce();
 }
 
 void loop() {
-  nh.spinOnce();
+  //determine motion needed
+  //  if (new_plan)     {
+  //    planMovement(commanded_position);
+  //    new_plan = false;
+  //  }
 
+  //log updates
+  if (millis() > next_update) {
+    updateStatus();
+    next_update = millis() + UPDATE_INTERVAL;
+  }
+
+  nh.spinOnce();
 }
