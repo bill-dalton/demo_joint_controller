@@ -75,6 +75,7 @@ bool new_plan = false;
 //debug messages
 char miscMsgs[20];
 char miscMsgs2[20];
+char miscMsgs3[20];
 char inbound_message[40];
 
 //internal position and direction variables
@@ -129,6 +130,7 @@ std_msgs::Float32 stepper_count_pos; //Equivalent joint position in +/- degrees,
 std_msgs::Float32 stepper_encoder_pos; //Equivalent joint position in +/- degrees, to three decimal places.
 std_msgs::Float32 torque;  ////torque joint rotation in +/- degrees, to three decimal places. std_msgs/Float32.
 std_msgs::String state; //may be in multiple states simultaneously
+std_msgs::String state2; //may be in multiple states simultaneously
 trajectory_msgs::JointTrajectoryPoint jtp;
 
 //endstop pins
@@ -201,7 +203,7 @@ void commandedPositionCallback(const std_msgs::Float32& the_command_msg_) {
   }
 }//end commandedPositionCallback()
 
-void commandedJointPositionsCallback(const std_msgs::String & the_command_msg_) {
+void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
   //action to be taken when msg received on topic commanded_joint_positions
   float joint_commands_[5];//array holding commanded position in degrees in order: BR,SL,UR,EL,LR
 
@@ -218,14 +220,33 @@ void commandedJointPositionsCallback(const std_msgs::String & the_command_msg_) 
   strcat(miscMsgs2, inbound_message);
   state.data = miscMsgs2;
 
-  //get first token and convert to float for BR commanded position
-  char* command = strtok(inbound_message, ",");
+//http://jhaskellsblog.blogspot.com/2011/06/parsing-quick-guide-to-strtok-there-are.html
+//this whole test section works and returns torque of 5.230000
+  char test_message[] = "6.23,4.56,7.89";
+  char* command;
+//  command = strtok(test_message, ",");
+//  command = strtok(inbound_message, ",");//explodes
+  command = strtok(miscMsgs2, ",");//works
+  float test_float_cmd;
+  joint_commands_[0] = atof(command);
+  torque.data = joint_commands_[0];
+
+  
+  
+  nh.loginfo("command=");
+  nh.loginfo(command);
   joint_commands_[0] = atof(command);
 
-  //debug pub to state topic - this all works
-//  miscMsgs2[0] = (char)0;  //"empties msg by setting first char in string to 0
-//  strcat(miscMsgs2, command);
-//  state.data = miscMsgs2;
+      char result2[8]; // Buffer big enough for 7-character float
+      dtostrf(joint_commands_[0], 6, 2, result2); // Leave room for too large numbers!
+      nh.loginfo("joint_commands_[0]=");//this works
+      nh.loginfo(result2);//this works
+
+  //debug pub to state2 topic 
+    miscMsgs3[0] = (char)0;  //"empties msg by setting first char in string to 0
+    strcat(miscMsgs3, command);
+//    strcat(miscMsgs3, inbound_message);
+    state2.data = miscMsgs3;
 
   int joint_index = 1;//note starts at 1 because BR joint has already been parsed as j0int_index=0
   while (command != 0)
@@ -240,11 +261,12 @@ void commandedJointPositionsCallback(const std_msgs::String & the_command_msg_) 
     case SL_IDENT:
       joint_index = 1;
       commanded_position = joint_commands_[joint_index];
-      sprintf(miscMsgs, "SL cmd %3.2f", commanded_position);
-      //      sprintf(miscMsgs, "SL cmd2 % f", test_var);
-      nh.loginfo(miscMsgs);
-      torque.data = joint_commands_[joint_index];
-      //torque.data = 5.76;
+      
+      char result[8]; // Buffer big enough for 7-character float
+      dtostrf(commanded_position, 6, 2, result); // Leave room for too large numbers!
+      nh.loginfo("commanded_position=");//this works
+      nh.loginfo(result);//this works
+      
       break;
     case UR_IDENT:
       joint_index = 2;
@@ -281,6 +303,7 @@ ros::Publisher SL_stepper_encoder_pos_pub("SL_stepper_encoder_pos", &stepper_enc
 ros::Publisher SL_torque_pub("SL_torque", &torque);       //BR joint rotation in +/- degrees, to three decimal places. std_msgs/Float32.
 //ros::Publisher BR_joint_state_pub("BR_joint_state", &BR_joint_state);  //sensor_msgs/JointState
 ros::Publisher SL_state_pub("SL_state", &state);        //std_msgs/String. States such cw_endstop_activated, holding_position, moving, unpowered, yellow_torque, red_torque
+ros::Publisher SL_state2_pub("SL_state2", &state2);        //std_msgs/String. States such cw_endstop_activated, holding_position, moving, unpowered, yellow_torque, red_torque
 
 //ros::Publisher joint_aoe_pos_pub("BR_aoe_pos", &joint_aoe_pos);     //BR joint position in +/- degrees, to three decimal places. std_msgs/Float32. This is result of lookup function.
 ros::Publisher UR_joint_encoder_pos_pub("UR_joint_encoder_pos", &joint_encoder_pos);     //BR joint position in +/- degrees, to three decimal places. Stored internally as a long, then converted when published to Float32
@@ -308,7 +331,7 @@ ros::Publisher LR_state_pub("LR_state", &state);        //std_msgs/String. State
 
 void updateStatus() {
   //publish stuff for this joint
-  torque.data = commanded_position;
+//  torque.data = commanded_position;
   SL_torque_pub.publish( &torque );
   SL_state_pub.publish( &state );
   switch (minion_ident) {
@@ -319,6 +342,7 @@ void updateStatus() {
       SL_torque_pub.publish( &torque );
       //      SL_joint_state_pub.publish( &BR_joint_state );
       SL_state_pub.publish( &state );
+      SL_state2_pub.publish( &state2 );
       break;
     case UR_IDENT:
       UR_joint_encoder_pos_pub.publish( &joint_encoder_pos );
@@ -376,6 +400,7 @@ void setup() {
       nh.advertise(SL_stepper_encoder_pos_pub);
       nh.advertise(SL_torque_pub);
       nh.advertise(SL_state_pub);
+      nh.advertise(SL_state2_pub);
       //      nh.subscribe(SL_plan_sub);
       nh.loginfo("SetupSL");
       break;
