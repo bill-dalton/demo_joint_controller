@@ -326,8 +326,6 @@ ros::Publisher LR_state_pub("LR_state", &state);        //std_msgs/String. State
 void updateStatus() {
   //publish stuff for this joint
   //  torque.data = commanded_position;
-//  SL_torque_pub.publish( &torque );
-//  SL_state_pub.publish( &state );
   switch (minion_ident) {
     case SL_IDENT:
       SL_joint_encoder_pos_pub.publish( &joint_encoder_pos );
