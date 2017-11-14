@@ -45,18 +45,24 @@
       WR      OFF         ON          ON          ON             8
       EE1     ON          OFF         OFF         OFF            7
       EE2     ON          OFF         OFF         ON             6
+
+      Minion Ident Great To Do Idea! 13Nov2017:
+      Redo minion_ident DIP switch assignments so that minion_ident is
+      identical to joint index for ROS stuff like JointTrajectoryPoint,
+      BR_IDENT = 0, SL_IDENT = 1, and so on ...
 */
 
 /*
    TO DO
    1/2 - @ident & switch case for joint identification
-   doesn't work - @commanded_joint_positions method
+   1/2 - @commanded_joint_positions method
    @test simple, 4x command terminals BR_cmd, SL_cmd etc.
    @experiment with JointTrajectoryPoint
       .cpp to read a line tped in terminal, then publish
       this program subscribes, then acts on JTP
    @test pub/sub 4X Arduinos on USB hub
    @lookup table for 100 rows for accel created from .xls Lieb Ramp
+   @implement minion_ident renumbering to match joint_ident
 */
 
 #include <ros.h>
@@ -165,13 +171,14 @@ const int EE1_IDENT = 7;
 const int EE2_IDENT = 6;
 
 //ROS node handler
-ros::NodeHandle  nh;
+//ros::NodeHandle  nh;
 //added this next line to increase size of sub and pub buffers. Defaults were 512bytes. Ref: https://github.com/tonybaltovski/ros_arduino/issues/10
 //ros::NodeHandle_<ArduinoHardware, 2, 10, 4096, 4096> nh;//this uses too much dynamic memory for Mega
+ros::NodeHandle_<ArduinoHardware, 2, 8, 280, 280> nh;
 
 ////loop timing variables
 volatile unsigned long next_update = 0;//used to time loop updates
-const unsigned long UPDATE_INTERVAL = 1000;//in milliseconds
+const unsigned long UPDATE_INTERVAL = 200;//in milliseconds
 
 //debug stuff
 float test_var = 56.66;
@@ -215,39 +222,33 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
   nh.loginfo("InbdMsg=");
   nh.loginfo(inbound_message);//this now works
 
-  //load state.data for eventual publishing by updateStatus()
-  miscMsgs2[0] = (char)0;  //"empties msg by setting first char in string to 0
-  strcat(miscMsgs2, inbound_message);
-  state.data = miscMsgs2;
+  //  //debug load state.data for eventual publishing by updateStatus()
+  //  miscMsgs2[0] = (char)0;  //"empties msg by setting first char in string to 0
+  //  strcat(miscMsgs2, inbound_message);
+  //  state.data = miscMsgs2;
 
-//http://jhaskellsblog.blogspot.com/2011/06/parsing-quick-guide-to-strtok-there-are.html
-//this whole test section works and returns torque of 5.230000
-  char test_message[] = "6.23,4.56,7.89";
+  //process first token in inbound_message
+  //http://jhaskellsblog.blogspot.com/2011/06/parsing-quick-guide-to-strtok-there-are.html
+  //this whole test section works and returns torque of 5.230000
+  //char test_message[] = "6.23,4.56,7.89";
   char* command;
-//  command = strtok(test_message, ",");
-//  command = strtok(inbound_message, ",");//explodes
-  command = strtok(miscMsgs2, ",");//works
-  float test_float_cmd;
+  //  command = strtok(test_message, ",");//works
+  command = strtok(inbound_message, ",");//works
   joint_commands_[0] = atof(command);
   torque.data = joint_commands_[0];
 
-  
-  
-  nh.loginfo("command=");
-  nh.loginfo(command);
-  joint_commands_[0] = atof(command);
+  //debug loginfo
+  char result2[8]; // Buffer big enough for 7-character float
+  dtostrf(joint_commands_[0], 6, 2, result2); // Leave room for too large numbers!
+  nh.loginfo("joint_commands_[0]=");//this works
+  nh.loginfo(result2);//this works
 
-      char result2[8]; // Buffer big enough for 7-character float
-      dtostrf(joint_commands_[0], 6, 2, result2); // Leave room for too large numbers!
-      nh.loginfo("joint_commands_[0]=");//this works
-      nh.loginfo(result2);//this works
+  //  //debug pub to state2 topic
+  //  miscMsgs3[0] = (char)0;  //"empties msg by setting first char in string to 0
+  //  strcat(miscMsgs3, command);
+  //  state2.data = miscMsgs3;
 
-  //debug pub to state2 topic 
-    miscMsgs3[0] = (char)0;  //"empties msg by setting first char in string to 0
-    strcat(miscMsgs3, command);
-//    strcat(miscMsgs3, inbound_message);
-    state2.data = miscMsgs3;
-
+  //process remaining tokens in inbound_message
   int joint_index = 1;//note starts at 1 because BR joint has already been parsed as j0int_index=0
   while (command != 0)
   {
@@ -260,35 +261,28 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
   switch (minion_ident) {
     case SL_IDENT:
       joint_index = 1;
-      commanded_position = joint_commands_[joint_index];
-      
-      char result[8]; // Buffer big enough for 7-character float
-      dtostrf(commanded_position, 6, 2, result); // Leave room for too large numbers!
-      nh.loginfo("commanded_position=");//this works
-      nh.loginfo(result);//this works
-      
       break;
     case UR_IDENT:
       joint_index = 2;
-      commanded_position = joint_commands_[joint_index];
-      sprintf(miscMsgs, "UR cmd %3.2f", commanded_position);
-      nh.loginfo(miscMsgs);
       break;
     case EL_IDENT:
       joint_index = 3;
-      commanded_position = joint_commands_[joint_index];
-      sprintf(miscMsgs, "EL cmd %3.2f", commanded_position);
-      nh.loginfo(miscMsgs);
       break;
     case LR_IDENT:
       joint_index = 4;
-      commanded_position = joint_commands_[joint_index];
-      sprintf(miscMsgs, "LR cmd %3.2f", commanded_position);
-      nh.loginfo(miscMsgs);
       break;
     default:
       break;
   }//end switch case
+
+  //assign commanded position
+  commanded_position = joint_commands_[joint_index];
+
+  //debug loginfo commanded position
+  char result[8]; // Buffer big enough for 7-character float
+  dtostrf(commanded_position, 6, 2, result); // Leave room for too large numbers!
+  nh.loginfo("commanded_position=");//this works
+  nh.loginfo(result);//this works
 
 }// end commandedPositionCallback()
 
@@ -331,9 +325,9 @@ ros::Publisher LR_state_pub("LR_state", &state);        //std_msgs/String. State
 
 void updateStatus() {
   //publish stuff for this joint
-//  torque.data = commanded_position;
-  SL_torque_pub.publish( &torque );
-  SL_state_pub.publish( &state );
+  //  torque.data = commanded_position;
+//  SL_torque_pub.publish( &torque );
+//  SL_state_pub.publish( &state );
   switch (minion_ident) {
     case SL_IDENT:
       SL_joint_encoder_pos_pub.publish( &joint_encoder_pos );
@@ -385,65 +379,73 @@ void setup() {
   bitWrite(minion_ident, 3, digitalRead(IDENT_PIN_8));
 
   //setup publishers and subscribers
-  //  nh.getHardware()->setBaud(230400);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
-  nh.getHardware()->setBaud(115200);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
-  //  nh.getHardware()->setBaud(57600);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
+  //    nh.getHardware()->setBaud(230400);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
+    nh.getHardware()->setBaud(115200);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
+//  nh.getHardware()->setBaud(57600);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
+  //    nh.getHardware()->setBaud(9600);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
   nh.initNode();
   nh.subscribe(commanded_joint_positions_sub);
 
   //use swtich to only setup pubs and subs needed for this minion's joint
-  switch (minion_ident) {
-    case SL_IDENT:
-      // SL joint
-      nh.advertise(SL_joint_encoder_pos_pub);
-      nh.advertise(SL_stepper_count_pos_pub);
-      nh.advertise(SL_stepper_encoder_pos_pub);
-      nh.advertise(SL_torque_pub);
-      nh.advertise(SL_state_pub);
-      nh.advertise(SL_state2_pub);
-      //      nh.subscribe(SL_plan_sub);
-      nh.loginfo("SetupSL");
-      break;
-    case UR_IDENT:
-      // UR joint
-      nh.advertise(UR_joint_encoder_pos_pub);
-      nh.advertise(UR_stepper_count_pos_pub);
-      nh.advertise(UR_stepper_encoder_pos_pub);
-      nh.advertise(UR_torque_pub);
-      nh.advertise(UR_state_pub);
-      //      nh.subscribe(UR_plan_sub);
-      nh.loginfo("SetupUR");
-      break;
-    case EL_IDENT:
-      // EL joint
-      nh.advertise(EL_joint_encoder_pos_pub);
-      nh.advertise(EL_stepper_count_pos_pub);
-      nh.advertise(EL_stepper_encoder_pos_pub);
-      nh.advertise(EL_torque_pub);
-      nh.advertise(EL_state_pub);
-      //      nh.subscribe(EL_plan_sub);
-      nh.loginfo("SetupEL");
-      break;
-    case LR_IDENT:
-      // LR joint
-      nh.advertise(LR_joint_encoder_pos_pub);
-      nh.advertise(LR_stepper_count_pos_pub);
-      nh.advertise(LR_stepper_encoder_pos_pub);
-      nh.advertise(LR_torque_pub);
-      nh.advertise(LR_state_pub);
-      //      nh.sscribe(LR_plan_sub);
-      nh.loginfo("SetupLR");
-      break;
-    default:
-      break;
-  }//end switch case
+    switch (minion_ident) {
+      case SL_IDENT:
+        // SL joint
+        nh.advertise(SL_joint_encoder_pos_pub);
+        nh.advertise(SL_stepper_count_pos_pub);
+        nh.advertise(SL_stepper_encoder_pos_pub);
+        nh.advertise(SL_torque_pub);
+        nh.advertise(SL_state_pub);
+        nh.advertise(SL_state2_pub);
+        //      nh.subscribe(SL_plan_sub);
+        nh.loginfo("SetupSL");
+        break;
+      case UR_IDENT:
+        // UR joint
+        nh.advertise(UR_joint_encoder_pos_pub);
+        nh.advertise(UR_stepper_count_pos_pub);
+        nh.advertise(UR_stepper_encoder_pos_pub);
+        nh.advertise(UR_torque_pub);
+        nh.advertise(UR_state_pub);
+        //      nh.subscribe(UR_plan_sub);
+        nh.loginfo("SetupUR");
+        break;
+      case EL_IDENT:
+        // EL joint
+        nh.advertise(EL_joint_encoder_pos_pub);
+        nh.advertise(EL_stepper_count_pos_pub);
+        nh.advertise(EL_stepper_encoder_pos_pub);
+        nh.advertise(EL_torque_pub);
+        nh.advertise(EL_state_pub);
+        //      nh.subscribe(EL_plan_sub);
+        nh.loginfo("SetupEL");
+        break;
+      case LR_IDENT:
+        // LR joint
+        nh.advertise(LR_joint_encoder_pos_pub);
+        nh.advertise(LR_stepper_count_pos_pub);
+        nh.advertise(LR_stepper_encoder_pos_pub);
+        nh.advertise(LR_torque_pub);
+        nh.advertise(LR_state_pub);
+        //      nh.sscribe(LR_plan_sub);
+        nh.loginfo("SetupLR");
+        break;
+      default:
+        break;
+    }//end switch case
 
-  nh.loginfo("V0.0.16");
+  nh.loginfo("V0.0.20");
 
   nh.spinOnce();
 }
 
+
 void loop() {
+  //wait until you are actually connected. Ref: http://wiki.ros.org/rosserial_arduino/Tutorials/Logging
+//  while (!nh.connected())
+//  {
+//    nh.spinOnce();
+//  }
+
   //determine motion needed
   //  if (new_plan)     {
   //    planMovement(commanded_position);
@@ -452,6 +454,7 @@ void loop() {
 
   //log updates
   if (millis() > next_update) {
+ // to do ?Add a if (!nh.connected()){spinOnce()} else {updateStatus()};
     updateStatus();
     next_update = millis() + UPDATE_INTERVAL;
   }
