@@ -54,19 +54,27 @@
 
 /*
    TO DO
-   1/2 - @ident & switch case for joint identification
-   1/2 - @commanded_joint_positions method
-   @test simple, 4x command terminals BR_cmd, SL_cmd etc.
+   done - @ident & switch case for joint identification
+   done - @commanded_joint_positions method
+   done - @test 5x Arduino on USB Hub with rqt - Tests good!
+   @implement commanded_joint_positions first term is time in seconds in which to complete motion
+   @ ??? should i calc my LUT from my params during setup()?
+        would making changin accel params MUCH easier!
+   @lookup table for 100 rows for accel created from .xls Lieb Ramp
+      @change timer in setup() from Due timer to Mega
+      @implent setting Timer1 for next pulse
+   @add readSensors() method detail
+   @implement something to set positions to zero
+   @implement stuff to actually move steppers
    @experiment with JointTrajectoryPoint
       .cpp to read a line tped in terminal, then publish
       this program subscribes, then acts on JTP
-   @test pub/sub 4X Arduinos on USB hub
-   @lookup table for 100 rows for accel created from .xls Lieb Ramp
    @implement minion_ident renumbering to match joint_ident
 */
 
 #include <ros.h>
 #include <ArduinoHardware.h>
+#include <TimerOne.h>
 #include <std_msgs/String.h>
 #include <std_msgs/Float32.h>
 #include <trajectory_msgs/JointTrajectoryPoint.h>
@@ -93,7 +101,7 @@ volatile long stepper_counts = 0; //stepper position in stepper steps
 const int STEPPER_STEPS_PER_REV = 200;  //stepper motor specific
 const int MICROSTEPS = 4;               //set on stepper driver
 const float GEAR_RATIO = 65.0;
-const float STEPPER_DEGREES_PER_STEP = 0.03;//=360/200/15/4
+//const float STEPPER_DEGREES_PER_STEP = 0.03;//=360/200/15/4
 
 //encoder constants
 const int ENCODER_1_PPR = 2400;
@@ -105,7 +113,9 @@ const float ENCODER_2_DEGREES_PER_COUNT = 0.01;       //=360 / ENCODER_2_PPR / E
 const float ENCODER_1_COUNTS_PER_STEPPER_COUNT = 36.0;//= GEAR_REDUCTION_RATIO_STEPPER_TO_SERIES_ELASTIC * ENCODER_1_PPR / (STEPPER_STEPS_PER_REV * MICROSTEPS);
 
 //motion constants
-const float DEGREES_PER_MICROSTEP = 0.03; //= 360 / (STEPPER_STEPS_PER_REV * MICROSTEPS) / GEAR_RATIO;
+const float MAX_VEL = 25.0;   //degrees/sec
+const float MAX_ACCEL = 10.0; //degrees/sec^2
+const float DEGREES_PER_MICROSTEP = 0.006923;// = 0.03; //= 360 / (STEPPER_STEPS_PER_REV * MICROSTEPS) / GEAR_RATIO;
 const float POSITION_HOLD_TOLERANCE = 0.2;    //in degrees
 const long POSITION_ADJUSTMENT_SPEED = 5000;  //stepper period interval speed at which to make position adjustments
 const float RETREAT_DISTANCE = 1.0;           //degrees to retreat
@@ -128,6 +138,19 @@ volatile long close_enough = POSITION_HOLD_TOLERANCE * DEGREES_PER_MICROSTEP;//p
 volatile long my_queue[QUEUE_SIZE];
 volatile unsigned int head = 0; //index to front of my_queue
 volatile unsigned int tail = 0; //index to rear of my_queue
+
+//linear acceleration Lookup Table (LUT)
+const int NUM_PLATEAUS = 50;//  number of steps (plateaus) in acceleration LUT
+const float PLATEAU_DURATION = MAX_VEL / MAX_ACCEL / NUM_PLATEAUS;
+volatile long accel_LUT[NUM_PLATEAUS][3];
+
+//position variables
+long max_stepper_counts = 0;      //position of stepper at CW endstop
+long min_stepper_counts = 0;      //position of stepper at CCW endstop
+long max_stepper_doe_counts = 0;  //position of stepper doe at CW endstop
+long min_stepper_doe_counts = 0;  //position of stepper doe at CCW endstop
+long max_doe_counts = 0;         //position of joint doe at CW endstop
+long min_doe_counts = 0;          //position of joint doe at CCW endstop
 
 //variables to be published
 //std_msgs::Float32 joint_aoe_pos; //joint position in +/- degrees, to three decimal places. Stored internally as a long, then converted when published to std_msgs/Float32
@@ -323,7 +346,331 @@ ros::Publisher LR_torque_pub("LR_torque", &torque);       //BR joint rotation in
 //ros::Publisher BR_joint_state_pub("BR_joint_state", &BR_joint_state);  //sensor_msgs/JointState
 ros::Publisher LR_state_pub("LR_state", &state);        //std_msgs/String. States such cw_endstop_activated, holding_position, moving, unpowered, yellow_torque, red_torque
 
-void updateStatus() {
+void doEncoder1A() {
+  /*  encoder rotation causes encoder pins to change state. this monitors sequence of
+      pins changes to determine direction and counts pulses to determine position change.
+      A Series-Elastic joint and gear reduction connect the stepper motor to the encoder.
+      THe difference between the encoder position and the stepper position is proportional
+      to the torque across the Series-Elastic joint. Integer math can be used for torque
+      measurement in real-time by selecting a gear reduction ratio to be an integer multiple
+      of the ratio between encoder counts per revolution and stepper counts per revolution.
+      At each encoder pulse, the encoder count is incremented by this integer multiple, thus
+      at any time, the stepper position and the encoder position can be directly compared to determine torque.
+      For example, in this incarnation:
+      Stepper steps per revolution: 200
+      ENcoder counts per revolution: 360
+      Ration encoder counts to stepper steps: 360/200 = 1.8:1
+      Planetary gear reduction ratio: 3.6:1
+      Integer multiple: 3.6/1.8 = 2
+      Increment/decrement encoder count by integer multiple of 2 at each encoder pulse
+  */
+  // look for a low-to-high on channel A
+  if (digitalRead(ENCODER_1_PIN_A) == HIGH) {
+    // check channel B to see which way encoder is turning
+    if (digitalRead(ENCODER_1_PIN_B) == LOW) {
+      //      encoder_1_pos += 1;         // CW
+      encoder_1_pos -= 1;          // CCW
+    }
+    else {
+      //      encoder_1_pos -= 1;         // CCW
+      encoder_1_pos += 1;         // CW
+    }
+  }
+  else   // must be a high-to-low edge on channel A
+  {
+    // check channel B to see which way encoder is turning
+    if (digitalRead(ENCODER_1_PIN_B) == HIGH) {
+      //      encoder_1_pos += 1;          // CW
+      encoder_1_pos -= 1;          // CCW
+    }
+    else {
+      //      encoder_1_pos -= 1;          // CCW
+      encoder_1_pos += 1;         // CW
+    }
+  }
+} //end doEncoder1A()
+
+void doEncoder1B() {
+  // look for a low-to-high on channel B
+  if (digitalRead(ENCODER_1_PIN_B) == HIGH) {
+    // check channel A to see which way encoder is turning
+    if (digitalRead(ENCODER_1_PIN_A) == HIGH) {
+      //      encoder_1_pos += 1;         // CW
+      encoder_1_pos -= 1;          // CCW
+    }
+    else {
+      //      encoder_1_pos -= 1;         // CCW
+      encoder_1_pos += 1;         // CW
+    }
+  }
+  // Look for a high-to-low on channel B
+  else {
+    // check channel B to see which way encoder is turning
+    if (digitalRead(ENCODER_1_PIN_A) == LOW) {
+      //      encoder_1_pos += 1;          // CW
+      encoder_1_pos -= 1;          // CCW
+    }
+    else {
+      //      encoder_1_pos -= 1;          // CCW
+      encoder_1_pos += 1;         // CW
+    }
+  }
+} //end doEncoder1B()
+
+void doEncoder2A() {
+  /*  encoder rotation causes encoder pins to change state. this monitors sequence of
+      pins changes to determine direction and counts pulses to determine position change.
+      A Series-Elastic joint and gear reduction connect the stepper motor to the encoder.
+      THe difference between the encoder position and the stepper position is proportional
+      to the torque across the Series-Elastic joint. Integer math can be used for torque
+      measurement in real-time by selecting a gear reduction ratio to be an integer multiple
+      of the ratio between encoder counts per revolution and stepper counts per revolution.
+      At each encoder pulse, the encoder count is incremented by this integer multiple, thus
+      at any time, the stepper position and the encoder position can be directly compared to determine torque.
+      For example, in this incarnation:
+      Stepper steps per revolution: 200
+      ENcoder counts per revolution: 360
+      Ration encoder counts to stepper steps: 360/200 = 1.8:1
+      Planetary gear reduction ratio: 3.6:1
+      Integer multiple: 3.6/1.8 = 2
+      Increment/decrement encoder count by integer multiple of 2 at each encoder pulse
+  */
+  // look for a low-to-high on channel A
+  if (digitalRead(ENCODER_2_PIN_A) == HIGH) {
+    // check channel B to see which way encoder is turning
+    if (digitalRead(ENCODER_2_PIN_B) == LOW) {
+      //      encoder_2_pos += 1;         // CW
+      encoder_2_pos -= 1;          // CCW
+    }
+    else {
+      //      encoder_2_pos -= 1;         // CCW
+      encoder_2_pos += 1;         // CW
+    }
+  }
+  else   // must be a high-to-low edge on channel A
+  {
+    // check channel B to see which way encoder is turning
+    if (digitalRead(ENCODER_2_PIN_B) == HIGH) {
+      //      encoder_2_pos += 1;          // CW
+      encoder_2_pos -= 1;          // CCW
+    }
+    else {
+      //      encoder_2_pos -= 1;          // CCW
+      encoder_2_pos += 1;         // CW
+    }
+  }
+} //end doEncoder2A()
+
+void doEncoder2B() {
+  // look for a low-to-high on channel B
+  if (digitalRead(ENCODER_2_PIN_B) == HIGH) {
+    // check channel A to see which way encoder is turning
+    if (digitalRead(ENCODER_2_PIN_A) == HIGH) {
+      //      encoder_2_pos += 1;         // CW
+      encoder_2_pos -= 1;          // CCW
+    }
+    else {
+      //      encoder_2_pos -= 1;         // CCW
+      encoder_2_pos += 1;         // CW
+    }
+  }
+  // Look for a high-to-low on channel B
+  else {
+    // check channel B to see which way encoder is turning
+    if (digitalRead(ENCODER_2_PIN_A) == LOW) {
+      //      encoder_2_pos += 1;          // CW
+      encoder_2_pos -= 1;          // CCW
+    }
+    else {
+      //      encoder_2_pos -= 1;          // CCW
+      encoder_2_pos += 1;         // CW
+    }
+  }
+} //end doEncoder2B()
+
+void pulseStepper() {
+  //pulses stepper during normal motion.
+  digitalWrite(STEP_PIN, HIGH);
+  //    delayMicroseconds(5);  //increase this if pulses too fast for accurate step or jitters
+  digitalWrite(STEP_PIN, LOW);
+  //    delayMicroseconds(5);  //increase this if pulses too fast for accurate step or jitters
+  if (direction_CW) {
+    stepper_counts++;
+  }
+  else {
+    stepper_counts--;
+  }
+} // end pulseStepper()
+
+void stepOnce() {
+  /*
+     determines, based on state, whether or not to pulse stepper
+  */
+  //  nh.loginfo("stepOnce()");
+
+  //debug
+  //    nh.loginfo("entering stepOnce()");
+  //    nh.spinOnce();
+
+  //debug stuff
+  //  sprintf(miscMsgs, "next_period = % d", next_period);
+  //  nh.loginfo(miscMsgs);
+  //  sprintf(miscMsgs2, "current_period = % d", current_period);
+  //  nh.loginfo(miscMsgs2);
+  //  nh.spinOnce();
+
+  //  sprintf(miscMsgs, "running_state = % d", running_state);
+  //  nh.loginfo(miscMsgs);
+  //  sprintf(miscMsgs2, "leib_state = % d", leib_state);
+  //  nh.loginfo(miscMsgs2);
+  //  nh.spinOnce();
+  //
+
+  switch (running_state) {
+    case UNPOWERED:
+      //      nh.loginfo("UNP");
+      break;
+    case HOLDING_POSITION:
+      //      nh.loginfo("HOLDING_POSITION");
+      if (steps_remaining > close_enough) {
+        //pulse stepper
+        pulseStepper();
+        //decrements steps remaining
+        steps_remaining--;
+      }
+      break;
+    case MOVING:
+      //      nh.loginfo("MOVING");
+      if (head <= tail) {
+        pulseStepper();
+      }
+      else {
+        running_state = HOLDING_POSITION;
+      }
+      //set up next timer's next interval period
+      //      Timer7.setPeriod(my_queue[head]).start();//must have .start() else setting new period appears to shut it down
+      Timer1.setPeriod(my_queue[head]);
+      head++;
+      break;
+    //    case FINAL_APPROACH:
+    //      //      nh.loginfo("FINAL_APPROACH");
+    //      if (steps_remaining > 0) {
+    //        //pulse stepper
+    //        pulseStepper();
+    //        //decrements steps remaining
+    //        steps_remaining--;
+    //      }
+    //      else {
+    //        //final_approach phase is complete, transition to holding_position
+    //        running_state = HOLDING_POSITION;
+    //      }
+    //      break;
+    case CW_ENDSTOP_ACTIVATED:
+      break;
+    case CCW_ENDSTOP_ACTIVATED:
+      break;
+    case CALIBRATING:
+      break;
+    default:
+      break;
+  }//end switch running_state
+}// end stepOnce()
+
+float getCurrentPos ( long encoder_position ) {
+  /*
+    Converts doe encoder_1_pos in doe encoder counts into degrees of joint position and centers appropriately from calibration()
+    Note encoder position zero is defined as CCW endstop, while joint position zero is defined as center of travel
+    Note that degrees of joint position can therefore be positive or negative
+    Conversion factor is half of fullscale doe travel
+  */
+  //To Do - reinstate after calibration routine finsihed
+  //  float float_pos_ = ENCODER_1_DEGREES_PER_COUNT * (encoder_1_pos - (max_doe_counts / 2));
+  float float_pos_ = (float) ENCODER_1_DEGREES_PER_COUNT * encoder_1_pos;
+  return float_pos_;
+}
+
+void planMovement(float the_commanded_position) {
+  /*
+     builds queue of timer periods from pre-computed array
+     
+     sets timer freq 
+     places freqs or intervals in my_queue
+  */
+  nh.loginfo("planMovement");
+
+  //stop Timer1 from firing pulses while plan is made
+  Timer1.stop();
+
+  float comm_pos_ = 0.0;
+  float dtg_ = 0.0;  //joint distance to travel in signed degrees. Sign indicates direction of movement
+  long total_dist_stepper_counts_;//total distance to travel in stepper counts
+  long accelerate_until_; //in stepper counts remaining
+  long decelerate_after_; //in stepper counts remaining
+  long tail_mirror_;      //my_queue index for decel phase so decel profile exactly equale accel profile
+  long current_period_ ;
+  long next_period_ ;
+
+  //get the commanded position passed to this function
+  comm_pos_ = the_commanded_position;
+
+  //get the distance to go
+  current_pos = getCurrentPos(encoder_1_pos); // uses doe as joint reference for now. Eventually will be aoe.
+  dtg_ = comm_pos_ - current_pos;  //joint distance to travel in signed degrees. Sign indicates direction of movement
+
+//  sprintf(miscMsgs2, "comm_pos_ = % f", comm_pos_);
+//  nh.loginfo(miscMsgs2);
+//  sprintf(miscMsgs2, "current_pos = % f", current_pos);
+//  nh.loginfo(miscMsgs2);
+
+ //convert dtg_ in degrees to dtg_stepper_counts
+  dtg_stepper_counts = (long) abs(dtg_ / DEGREES_PER_MICROSTEP);
+
+  //calculate total stepper counts to travel
+  total_dist_stepper_counts_ = dtg_stepper_counts;
+
+  //calculate length of acceleration phase, also not quite correct
+//  accelerate_until_ = 
+//    decelerate_after_ =   
+
+  //get direction of motion. positive distance defined as CW, negative as CCW
+  if (dtg_ > 0) {
+    direction_CW = true;
+    digitalWrite(DIR_PIN, LOW);
+    nh.loginfo("in planMovement(), dir is CW");
+  } else {
+    direction_CW = false;
+    digitalWrite(DIR_PIN, HIGH);
+    nh.loginfo("in planMovement(), dir is CCW");
+  }
+
+  //empty my_queue
+  for (int j = 0; j < (sizeof(my_queue) / 4); j++) {
+    my_queue[j] = 0;//setting DueTimer period to zero essentially stops timer from firing
+  }
+
+  //init my_queue. Essentially causes queue to appear empty
+  head = 0;
+  tail = 0;
+
+  //set leib state to begin populating my_queue
+//  leib_state = ACCELERATING;
+
+//  //populate queue
+//  while (dtg_stepper_counts > 0) {
+//    switch (leib_state) {
+//      case ACCELERATING:
+
+  
+}//end planMovement()
+
+
+
+
+void readSensors() {
+
+}//end readSensors()
+
+void publishAll() {
   //publish stuff for this joint
   //  torque.data = commanded_position;
   switch (minion_ident) {
@@ -376,62 +723,91 @@ void setup() {
   bitWrite(minion_ident, 2, digitalRead(IDENT_PIN_4));
   bitWrite(minion_ident, 3, digitalRead(IDENT_PIN_8));
 
+  //polpulate acceleration LookUp Table accel_LUT
+  long period_;           //time between stepper pulses in microseconds
+  float vel_deg_per_sec_; //velocity at a particular plateau in joint degrees per second
+  float vel_steps_per_sec_;//
+  long num_pulses_;       //number of pulses in a particular plateau
+  long cum_num_pulses_ = 0;   //cumulative number of pulses
+  for (int i = 0; i < NUM_PLATEAUS; i++){
+    //first column is period
+    vel_deg_per_sec_ = i * MAX_ACCEL * PLATEAU_DURATION;
+    vel_steps_per_sec_ = ( vel_deg_per_sec_ * GEAR_RATIO / DEGREES_PER_MICROSTEP ) * MICROSTEPS;
+    period_ = (long) (1 / vel_steps_per_sec_ ) * 1000000;
+    accel_LUT[0][i] = period_;
+    //second column is number of pulses in this plateau
+    num_pulses_ = (long) PLATEAU_DURATION * vel_steps_per_sec_;
+    accel_LUT[1][i] = num_pulses_;
+    //third column is cumlative number of pulses
+    cum_num_pulses_ = 
+    accel_LUT[2][i] = cum_num_pulses_;  
+  }
+
   //setup publishers and subscribers
   //    nh.getHardware()->setBaud(230400);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
-    nh.getHardware()->setBaud(115200);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
-//  nh.getHardware()->setBaud(57600);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
+  nh.getHardware()->setBaud(115200);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
+  //  nh.getHardware()->setBaud(57600);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
   //    nh.getHardware()->setBaud(9600);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
   nh.initNode();
   nh.subscribe(commanded_joint_positions_sub);
 
-  //use swtich to only setup pubs and subs needed for this minion's joint
-    switch (minion_ident) {
-      case SL_IDENT:
-        // SL joint
-        nh.advertise(SL_joint_encoder_pos_pub);
-        nh.advertise(SL_stepper_count_pos_pub);
-        nh.advertise(SL_stepper_encoder_pos_pub);
-        nh.advertise(SL_torque_pub);
-        nh.advertise(SL_state_pub);
-        nh.advertise(SL_state2_pub);
-        //      nh.subscribe(SL_plan_sub);
-        nh.loginfo("SetupSL");
-        break;
-      case UR_IDENT:
-        // UR joint
-        nh.advertise(UR_joint_encoder_pos_pub);
-        nh.advertise(UR_stepper_count_pos_pub);
-        nh.advertise(UR_stepper_encoder_pos_pub);
-        nh.advertise(UR_torque_pub);
-        nh.advertise(UR_state_pub);
-        //      nh.subscribe(UR_plan_sub);
-        nh.loginfo("SetupUR");
-        break;
-      case EL_IDENT:
-        // EL joint
-        nh.advertise(EL_joint_encoder_pos_pub);
-        nh.advertise(EL_stepper_count_pos_pub);
-        nh.advertise(EL_stepper_encoder_pos_pub);
-        nh.advertise(EL_torque_pub);
-        nh.advertise(EL_state_pub);
-        //      nh.subscribe(EL_plan_sub);
-        nh.loginfo("SetupEL");
-        break;
-      case LR_IDENT:
-        // LR joint
-        nh.advertise(LR_joint_encoder_pos_pub);
-        nh.advertise(LR_stepper_count_pos_pub);
-        nh.advertise(LR_stepper_encoder_pos_pub);
-        nh.advertise(LR_torque_pub);
-        nh.advertise(LR_state_pub);
-        //      nh.sscribe(LR_plan_sub);
-        nh.loginfo("SetupLR");
-        break;
-      default:
-        break;
-    }//end switch case
+  //setup timer
+  //  Timer7.attachInterrupt(stepOnce).setPeriod(0).start(); //delay(50);      //fires steppers at freqs specified in queue
 
-  nh.loginfo("V0.0.20");
+
+  //use swtich to only setup pubs and subs needed for this minion's joint
+  switch (minion_ident) {
+    case SL_IDENT:
+      // SL joint
+      nh.advertise(SL_joint_encoder_pos_pub);
+      nh.advertise(SL_stepper_count_pos_pub);
+      nh.advertise(SL_stepper_encoder_pos_pub);
+      nh.advertise(SL_torque_pub);
+      nh.advertise(SL_state_pub);
+      nh.advertise(SL_state2_pub);
+      //      nh.subscribe(SL_plan_sub);
+      nh.loginfo("SetupSL");
+      break;
+    case UR_IDENT:
+      // UR joint
+      nh.advertise(UR_joint_encoder_pos_pub);
+      nh.advertise(UR_stepper_count_pos_pub);
+      nh.advertise(UR_stepper_encoder_pos_pub);
+      nh.advertise(UR_torque_pub);
+      nh.advertise(UR_state_pub);
+      //      nh.subscribe(UR_plan_sub);
+      nh.loginfo("SetupUR");
+      break;
+    case EL_IDENT:
+      // EL joint
+      nh.advertise(EL_joint_encoder_pos_pub);
+      nh.advertise(EL_stepper_count_pos_pub);
+      nh.advertise(EL_stepper_encoder_pos_pub);
+      nh.advertise(EL_torque_pub);
+      nh.advertise(EL_state_pub);
+      //      nh.subscribe(EL_plan_sub);
+      nh.loginfo("SetupEL");
+      break;
+    case LR_IDENT:
+      // LR joint
+      nh.advertise(LR_joint_encoder_pos_pub);
+      nh.advertise(LR_stepper_count_pos_pub);
+      nh.advertise(LR_stepper_encoder_pos_pub);
+      nh.advertise(LR_torque_pub);
+      nh.advertise(LR_state_pub);
+      //      nh.sscribe(LR_plan_sub);
+      nh.loginfo("SetupLR");
+      break;
+    default:
+      break;
+  }//end switch case
+
+  //  Timer7.attachInterrupt(stepOnce).setPeriod(0).start(); //delay(50);      //fires steppers at freqs specified in queue
+  //ref: https://playground.arduino.cc/Code/Timer1
+  Timer1.initialize(500000);  // initialize timer1, and set a 1/2 second period
+  Timer1.attachInterrupt(stepOnce);
+
+  nh.loginfo("V0.0.21");
 
   nh.spinOnce();
 }
@@ -439,10 +815,10 @@ void setup() {
 
 void loop() {
   //wait until you are actually connected. Ref: http://wiki.ros.org/rosserial_arduino/Tutorials/Logging
-//  while (!nh.connected())
-//  {
-//    nh.spinOnce();
-//  }
+  //  while (!nh.connected())
+  //  {
+  //    nh.spinOnce();
+  //  }
 
   //determine motion needed
   //  if (new_plan)     {
@@ -452,8 +828,9 @@ void loop() {
 
   //log updates
   if (millis() > next_update) {
- // to do ?Add a if (!nh.connected()){spinOnce()} else {updateStatus()};
-    updateStatus();
+    // to do ?Add a if (!nh.connected()){spinOnce()} else {updateStatus()};
+    readSensors();
+    publishAll();
     next_update = millis() + UPDATE_INTERVAL;
   }
 
