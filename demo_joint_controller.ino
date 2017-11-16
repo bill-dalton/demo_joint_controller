@@ -57,12 +57,11 @@
    done - @ident & switch case for joint identification
    done - @commanded_joint_positions method
    done - @test 5x Arduino on USB Hub with rqt - Tests good!
-   @implement commanded_joint_positions first term is time in seconds in which to complete motion
-   @ ??? should i calc my LUT from my params during setup()?
+   done - @implement commanded_joint_positions first term is time in seconds in which to complete motion
+   done - @calc my LUT from my params during setup()? Yes!
         would making changin accel params MUCH easier!
-   @lookup table for 100 rows for accel created from .xls Lieb Ramp
-      @change timer in setup() from Due timer to Mega
-      @implent setting Timer1 for next pulse
+   done - @change timer in setup() from Due timer to Mega
+   done - @implent setting Timer1 for next pulse
    @add readSensors() method detail
    @implement something to set positions to zero
    @implement stuff to actually move steppers
@@ -126,12 +125,19 @@ const float YELLOW_LIMIT = 10.0;//torque yellow limit in degrees of joint travel
 const float RED_LIMIT = 25.0;
 
 //motion variables
+volatile float required_duration;    //required duration in seconds for joint movement
 volatile float commanded_position = 0.0; //joint commanded_position in degrees
+volatile int cruise_plateau_index = 0;  //index of fastest plateau to be used in a particular movement
+volatile int current_plateau_index = 0;
 volatile bool direction_CW = true;   //movement in positive joint direction is defined as CW
 volatile float current_pos = 0.0;    //joint position in degrees
 volatile float pos_error = 0.0;    //difference in degrees between joint commanded_position and joint current position
 volatile long dtg_stepper_counts = 0;//in absolute value of stepper counts
+volatile long accel_until_stepper_counts = 0;//in absolute value of stepper counts
+volatile long decel_after_stepper_counts = 0;//in absolute value of stepper counts
+volatile long cruising_stepper_counts = 0;
 volatile long steps_remaining = 0; //stepper steps remaining to move. uses in final_approach and holding_position
+volatile long current_plateau_steps_remaining = 0;
 volatile long close_enough = POSITION_HOLD_TOLERANCE * DEGREES_PER_MICROSTEP;//position holding tolerance in stepper steps
 
 //my queue
@@ -234,8 +240,17 @@ void commandedPositionCallback(const std_msgs::Float32& the_command_msg_) {
 }//end commandedPositionCallback()
 
 void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
-  //action to be taken when msg received on topic commanded_joint_positions
-  float joint_commands_[5];//array holding commanded position in degrees in order: BR,SL,UR,EL,LR
+  //
+  /*
+    action to be taken when msg received on topic commanded_joint_positions.
+    First token in command message is a message number (int) to determine if command is duplicate that already been processed
+    Second token is required duration of movement in (float) seconds
+    Subsequent tokens represent commanded position in (float) degrees for each joint
+      in order BR, SL, UR, EL, LR
+  */
+  int current_command_number_ = 0;
+  static int previous_command_number_ = 0;//unique integer identify this command
+  float joint_commands_[6];//array holding req'd duration and commanded position in degrees in order: BR,SL,UR,EL,LR
 
   //parse command
   inbound_message[0] = (char)0;  //"empties inbound_message by setting first char in string to 0
@@ -250,15 +265,30 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
   //  strcat(miscMsgs2, inbound_message);
   //  state.data = miscMsgs2;
 
-  //process first token in inbound_message
+  //process first token in inbound_message which is required duration in float seconds
   //http://jhaskellsblog.blogspot.com/2011/06/parsing-quick-guide-to-strtok-there-are.html
   //this whole test section works and returns torque of 5.230000
   //char test_message[] = "6.23,4.56,7.89";
   char* command;
   //  command = strtok(test_message, ",");//works
   command = strtok(inbound_message, ",");//works
-  joint_commands_[0] = atof(command);
-  torque.data = joint_commands_[0];
+  //joint_commands_[0] = atof(command);
+  joint_commands_[0] = atoi(command);//retrieves unique command message number
+  //  torque.data = joint_commands_[0];//only used for debug
+
+  //check this is not a repeated command
+  current_command_number_ = joint_commands_[0];
+  if (current_command_number_ != previous_command_number_) {
+    //this is a new command. Plan and execute motion
+    //set previous commanded position
+    previous_command_number_ = current_command_number_;
+    //set flag
+    new_plan = true;//new_plan flag is polled in loop() to initiate a new plan and motion
+  }
+  else {
+    //this is a duplicate plan, exit
+    return;
+  }
 
   //debug loginfo
   char result2[8]; // Buffer big enough for 7-character float
@@ -272,7 +302,7 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
   //  state2.data = miscMsgs3;
 
   //process remaining tokens in inbound_message
-  int joint_index = 1;//note starts at 1 because BR joint has already been parsed as j0int_index=0
+  int joint_index = 1;//note starts at 1 because required duration has already been parsed as j0int_index=0
   while (command != 0)
   {
     command = strtok(0, ",");//note "0" i.e. null as input for subsequent calls to strtok()
@@ -282,23 +312,27 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
 
   //apply to only this joint
   switch (minion_ident) {
-    case SL_IDENT:
-      joint_index = 1;
-      break;
-    case UR_IDENT:
+    case BR_IDENT:
       joint_index = 2;
       break;
-    case EL_IDENT:
+    case SL_IDENT:
       joint_index = 3;
       break;
-    case LR_IDENT:
+    case UR_IDENT:
       joint_index = 4;
+      break;
+    case EL_IDENT:
+      joint_index = 5;
+      break;
+    case LR_IDENT:
+      joint_index = 6;
       break;
     default:
       break;
   }//end switch case
 
-  //assign commanded position
+  //assign required duration and commanded position
+  required_duration = joint_commands_[0];
   commanded_position = joint_commands_[joint_index];
 
   //debug loginfo commanded position
@@ -504,27 +538,9 @@ void pulseStepper() {
 
 void stepOnce() {
   /*
-     determines, based on state, whether or not to pulse stepper
+     determines, based on state, whether or not to pulse stepper, and how fast to pulse
   */
   //  nh.loginfo("stepOnce()");
-
-  //debug
-  //    nh.loginfo("entering stepOnce()");
-  //    nh.spinOnce();
-
-  //debug stuff
-  //  sprintf(miscMsgs, "next_period = % d", next_period);
-  //  nh.loginfo(miscMsgs);
-  //  sprintf(miscMsgs2, "current_period = % d", current_period);
-  //  nh.loginfo(miscMsgs2);
-  //  nh.spinOnce();
-
-  //  sprintf(miscMsgs, "running_state = % d", running_state);
-  //  nh.loginfo(miscMsgs);
-  //  sprintf(miscMsgs2, "leib_state = % d", leib_state);
-  //  nh.loginfo(miscMsgs2);
-  //  nh.spinOnce();
-  //
 
   switch (running_state) {
     case UNPOWERED:
@@ -541,17 +557,49 @@ void stepOnce() {
       break;
     case MOVING:
       //      nh.loginfo("MOVING");
-      if (head <= tail) {
-        pulseStepper();
+      if (current_plateau_steps_remaining > 0) {
+        current_plateau_steps_remaining--;
       }
       else {
-        running_state = HOLDING_POSITION;
+        //used up steps to pulse in this plateau, need to see if accelerating or decelerating
+        if (steps_remaining > accel_until_stepper_counts) {
+          //still accelerating, so move to next fastest plateau
+          current_plateau_index++;
+          Timer1.setPeriod(accel_LUT[current_plateau_index][0]);
+          //have we entered cruise phase?
+          if (current_plateau_index = cruise_plateau_index) {
+            //Yes, set up for cruise phase
+            current_plateau_steps_remaining = cruising_stepper_counts;
+          }
+          else {
+            //No, still more acceleration to come
+            current_plateau_steps_remaining = accel_LUT[current_plateau_index][1];
+          }
+        }
+        else if (steps_remaining < decel_after_stepper_counts) {
+          //Decelerating, do we still have steps to move?
+          if (steps_remaining > 0) {
+            //yes, still decelerating, so move to next slowest plateau
+            current_plateau_index--;
+            Timer1.setPeriod(accel_LUT[current_plateau_index][0]);
+            current_plateau_steps_remaining = accel_LUT[current_plateau_index][1];
+          }
+          else {
+            //no, movement is complete. setup HOLDING_POSITION state and return
+            running_state = HOLDING_POSITION;
+            Timer1.setPeriod(POSITION_ADJUSTMENT_SPEED);
+            return;
+          }
+        }
+        else {
+          //cruising 0- no action required
+        }
       }
-      //set up next timer's next interval period
-      //      Timer7.setPeriod(my_queue[head]).start();//must have .start() else setting new period appears to shut it down
-      Timer1.setPeriod(my_queue[head]);
-      head++;
+      //step and decrement
+      pulseStepper();
+      steps_remaining--;
       break;
+
     //    case FINAL_APPROACH:
     //      //      nh.loginfo("FINAL_APPROACH");
     //      if (steps_remaining > 0) {
@@ -589,48 +637,52 @@ float getCurrentPos ( long encoder_position ) {
   return float_pos_;
 }
 
-void planMovement(float the_commanded_position) {
+void planMovement(float the_commanded_position_) {
   /*
-     builds queue of timer periods from pre-computed array
-     
-     sets timer freq 
-     places freqs or intervals in my_queue
+     determines variables for movement controlled by accel_LUT
+     accel_until_stepper_counts and accel_until_stepper_counts
   */
+  float dtg_ = 0.0;  //joint distance to travel in signed degrees. Sign indicates direction of movement
+
   nh.loginfo("planMovement");
 
   //stop Timer1 from firing pulses while plan is made
   Timer1.stop();
 
-  float comm_pos_ = 0.0;
-  float dtg_ = 0.0;  //joint distance to travel in signed degrees. Sign indicates direction of movement
-  long total_dist_stepper_counts_;//total distance to travel in stepper counts
-  long accelerate_until_; //in stepper counts remaining
-  long decelerate_after_; //in stepper counts remaining
-  long tail_mirror_;      //my_queue index for decel phase so decel profile exactly equale accel profile
-  long current_period_ ;
-  long next_period_ ;
-
-  //get the commanded position passed to this function
-  comm_pos_ = the_commanded_position;
-
   //get the distance to go
   current_pos = getCurrentPos(encoder_1_pos); // uses doe as joint reference for now. Eventually will be aoe.
-  dtg_ = comm_pos_ - current_pos;  //joint distance to travel in signed degrees. Sign indicates direction of movement
+  dtg_ = the_commanded_position_ - current_pos;  //joint distance to travel in signed degrees. Sign indicates direction of movement
 
-//  sprintf(miscMsgs2, "comm_pos_ = % f", comm_pos_);
-//  nh.loginfo(miscMsgs2);
-//  sprintf(miscMsgs2, "current_pos = % f", current_pos);
-//  nh.loginfo(miscMsgs2);
+  //  sprintf(miscMsgs2, "comm_pos_ = % f", comm_pos_);
+  //  nh.loginfo(miscMsgs2);
+  //  sprintf(miscMsgs2, "current_pos = % f", current_pos);
+  //  nh.loginfo(miscMsgs2);
 
- //convert dtg_ in degrees to dtg_stepper_counts
+  //convert dtg_ in degrees to dtg_stepper_counts
   dtg_stepper_counts = (long) abs(dtg_ / DEGREES_PER_MICROSTEP);
 
-  //calculate total stepper counts to travel
-  total_dist_stepper_counts_ = dtg_stepper_counts;
+  /*
+     iterate through accel_LUT lookup table to determine lowest plateau speed level
+     that meets required duration of movement
+  */
+  float calculated_duration_ = 0.0;
+  for (int i = 1; i < NUM_PLATEAUS; i++) {
+    //starts at i=1 because first plateau has zeros in it
+    //first, calculate time to accel to, then decel from, the ith plateau
+    calculated_duration_ = 2 * i * PLATEAU_DURATION;
+    //then find the first index when this accel+decl is GREATER than the required duration.
+    if (calculated_duration_ > required_duration) {
+      //select the plateau that is one level faster than this one
+      cruise_plateau_index = i - 1;
+    }
+  }
 
-  //calculate length of acceleration phase, also not quite correct
-//  accelerate_until_ = 
-//    decelerate_after_ =   
+  //calculate accelerate until and decelerate after points in terms of stepper counts
+  accel_until_stepper_counts = dtg_stepper_counts - accel_LUT[cruise_plateau_index][2];
+  decel_after_stepper_counts = accel_LUT[cruise_plateau_index][2];
+
+  //calculate exact number of cruise stepper counts
+  cruising_stepper_counts = dtg_stepper_counts - (2 * accel_LUT[cruise_plateau_index][2]);
 
   //get direction of motion. positive distance defined as CW, negative as CCW
   if (dtg_ > 0) {
@@ -643,24 +695,13 @@ void planMovement(float the_commanded_position) {
     nh.loginfo("in planMovement(), dir is CCW");
   }
 
-  //empty my_queue
-  for (int j = 0; j < (sizeof(my_queue) / 4); j++) {
-    my_queue[j] = 0;//setting DueTimer period to zero essentially stops timer from firing
-  }
+  //set Timer1 to period specified in first plateau
+  Timer1.setPeriod(accel_LUT[1][0]);
 
-  //init my_queue. Essentially causes queue to appear empty
-  head = 0;
-  tail = 0;
-
-  //set leib state to begin populating my_queue
-//  leib_state = ACCELERATING;
-
-//  //populate queue
-//  while (dtg_stepper_counts > 0) {
-//    switch (leib_state) {
-//      case ACCELERATING:
-
-  
+  //initilaize first plateau parameters
+  steps_remaining = dtg_stepper_counts;
+  current_plateau_index = 1;
+  current_plateau_steps_remaining = accel_LUT[current_plateau_index][1];
 }//end planMovement()
 
 
@@ -729,7 +770,7 @@ void setup() {
   float vel_steps_per_sec_;//
   long num_pulses_;       //number of pulses in a particular plateau
   long cum_num_pulses_ = 0;   //cumulative number of pulses
-  for (int i = 0; i < NUM_PLATEAUS; i++){
+  for (int i = 0; i < NUM_PLATEAUS; i++) {
     //first column is period
     vel_deg_per_sec_ = i * MAX_ACCEL * PLATEAU_DURATION;
     vel_steps_per_sec_ = ( vel_deg_per_sec_ * GEAR_RATIO / DEGREES_PER_MICROSTEP ) * MICROSTEPS;
@@ -739,8 +780,13 @@ void setup() {
     num_pulses_ = (long) PLATEAU_DURATION * vel_steps_per_sec_;
     accel_LUT[1][i] = num_pulses_;
     //third column is cumlative number of pulses
-    cum_num_pulses_ = 
-    accel_LUT[2][i] = cum_num_pulses_;  
+    if (i == 0) {
+      cum_num_pulses_ = 0;
+    }
+    else {
+      cum_num_pulses_ = accel_LUT[2][i - 1] + num_pulses_;
+    }
+    accel_LUT[2][i] = cum_num_pulses_;
   }
 
   //setup publishers and subscribers
@@ -820,11 +866,13 @@ void loop() {
   //    nh.spinOnce();
   //  }
 
-  //determine motion needed
-  //  if (new_plan)     {
-  //    planMovement(commanded_position);
-  //    new_plan = false;
-  //  }
+  //  determine motion needed and begin moving
+  if (new_plan)     {
+    planMovement(commanded_position);
+    new_plan = false;
+    running_state = MOVING;
+    Timer1.start();
+  }
 
   //log updates
   if (millis() > next_update) {
