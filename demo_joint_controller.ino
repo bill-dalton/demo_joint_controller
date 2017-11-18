@@ -82,6 +82,20 @@
 enum {UNPOWERED, HOLDING_POSITION, MOVING, FINAL_APPROACH, CW_ENDSTOP_ACTIVATED, CCW_ENDSTOP_ACTIVATED, CALIBRATING } running_state;
 enum {GREEN, YELLOW, RED} torque_state;
 
+//states string messages
+char states_msg[100];
+char empty_states_msg[100] = "States: ";
+char unpowered_msg[] = "unpowered ";
+char holding_position_msg[] = "holding_position ";
+char moving_msg[] = "moving ";
+char final_approach_msg[] = "final_approach ";
+char cw_endstop_activated_msg[] = "cw_endstop_activated ";
+char ccw_endstop_activated_msg[] = "ccw_endstop_activated ";
+char calibrating_msg[] = "calibrating ";
+char green_torque_msg[] = "green";
+char yellow_torque_msg[] = "yellow";
+char red_torque_msg[] = "red";
+
 //flags
 bool new_plan = false;
 
@@ -203,11 +217,12 @@ const int EE2_IDENT = 6;
 //ros::NodeHandle  nh;
 //added this next line to increase size of sub and pub buffers. Defaults were 512bytes. Ref: https://github.com/tonybaltovski/ros_arduino/issues/10
 //ros::NodeHandle_<ArduinoHardware, 2, 10, 4096, 4096> nh;//this uses too much dynamic memory for Mega
-ros::NodeHandle_<ArduinoHardware, 2, 8, 280, 280> nh;
+//ros::NodeHandle_<ArduinoHardware, 2, 8, 280, 280> nh;
+ros::NodeHandle_<ArduinoHardware, 2, 8, 512, 1024> nh;
 
 ////loop timing variables
 volatile unsigned long next_update = 0;//used to time loop updates
-const unsigned long UPDATE_INTERVAL = 200;//in milliseconds
+const unsigned long UPDATE_INTERVAL = 500;//in milliseconds
 
 //debug stuff
 float test_var = 56.66;
@@ -540,7 +555,8 @@ void stepOnce() {
   /*
      determines, based on state, whether or not to pulse stepper, and how fast to pulse
   */
-  //  nh.loginfo("stepOnce()");
+//    nh.loginfo("stepOnce()");
+//    nh.spinOnce();
 
   switch (running_state) {
     case UNPOWERED:
@@ -653,13 +669,19 @@ void planMovement(float the_commanded_position_) {
   current_pos = getCurrentPos(encoder_1_pos); // uses doe as joint reference for now. Eventually will be aoe.
   dtg_ = the_commanded_position_ - current_pos;  //joint distance to travel in signed degrees. Sign indicates direction of movement
 
-  //  sprintf(miscMsgs2, "comm_pos_ = % f", comm_pos_);
-  //  nh.loginfo(miscMsgs2);
-  //  sprintf(miscMsgs2, "current_pos = % f", current_pos);
-  //  nh.loginfo(miscMsgs2);
+  //debug loginfo dtg_
+  char result[8]; // Buffer big enough for 7-character float
+  dtostrf(dtg_, 6, 2, result); // Leave room for too large numbers!
+  nh.loginfo("dtg_=");//this works
+  nh.loginfo(result);//this works
+
 
   //convert dtg_ in degrees to dtg_stepper_counts
-  dtg_stepper_counts = (long) abs(dtg_ / DEGREES_PER_MICROSTEP);
+  dtg_stepper_counts = (long) abs(dtg_ / DEGREES_PER_MICROSTEP);//good at east to here 11/17/17 12:42pm
+
+    //debug only
+    sprintf(miscMsgs, "dtg_stepper_counts=%d", dtg_stepper_counts);
+    nh.loginfo(miscMsgs);
 
   /*
      iterate through accel_LUT lookup table to determine lowest plateau speed level
@@ -677,43 +699,85 @@ void planMovement(float the_commanded_position_) {
     }
   }
 
+  nh.loginfo("finished iterating LUT");
+    
   //calculate accelerate until and decelerate after points in terms of stepper counts
   accel_until_stepper_counts = dtg_stepper_counts - accel_LUT[cruise_plateau_index][2];
   decel_after_stepper_counts = accel_LUT[cruise_plateau_index][2];
 
+  nh.loginfo("finished accel_until");
+  nh.spinOnce();
+
   //calculate exact number of cruise stepper counts
   cruising_stepper_counts = dtg_stepper_counts - (2 * accel_LUT[cruise_plateau_index][2]);
 
+  nh.loginfo("cruising_stepper_counts");
+  nh.spinOnce();
+  
   //get direction of motion. positive distance defined as CW, negative as CCW
   if (dtg_ > 0) {
     direction_CW = true;
     digitalWrite(DIR_PIN, LOW);
     nh.loginfo("in planMovement(), dir is CW");
+    nh.spinOnce();
   } else {
     direction_CW = false;
     digitalWrite(DIR_PIN, HIGH);
     nh.loginfo("in planMovement(), dir is CCW");
+    nh.spinOnce();
   }
+  nh.spinOnce();
+
+  //debug only
+  sprintf(miscMsgs, "accel_LUT[1][0]=%d", accel_LUT[1][0]);
+  nh.loginfo(miscMsgs);
 
   //set Timer1 to period specified in first plateau
-  Timer1.setPeriod(accel_LUT[1][0]);
+//  Timer1.setPeriod(accel_LUT[1][0]);
+  nh.loginfo("setPeriod");
+  nh.spinOnce();
 
   //initilaize first plateau parameters
   steps_remaining = dtg_stepper_counts;
   current_plateau_index = 1;
   current_plateau_steps_remaining = accel_LUT[current_plateau_index][1];
+
+  nh.loginfo("exiting planMovement()");
+  nh.spinOnce();
 }//end planMovement()
 
 
 
 
 void readSensors() {
-
+  //report state
+  strcpy(states_msg, empty_states_msg);      //overwrites previous states_msg with empty msg
+  if (running_state == UNPOWERED) strcat(states_msg, unpowered_msg);
+  if (running_state == HOLDING_POSITION) strcat(states_msg, holding_position_msg);
+  if (running_state == MOVING) strcat(states_msg, moving_msg);
+  if (running_state == FINAL_APPROACH) strcat(states_msg, final_approach_msg);
+  if (running_state == CW_ENDSTOP_ACTIVATED) strcat(states_msg, cw_endstop_activated_msg);
+  if (running_state == CCW_ENDSTOP_ACTIVATED) strcat(states_msg, ccw_endstop_activated_msg);
+  if (running_state == CALIBRATING) strcat(states_msg, calibrating_msg);
+  if (torque_state == GREEN) strcat(states_msg, green_torque_msg);
+  if (torque_state == YELLOW) strcat(states_msg, yellow_torque_msg);
+  if (torque_state == RED) strcat(states_msg, red_torque_msg);
 }//end readSensors()
 
 void publishAll() {
   //publish stuff for this joint
   //  torque.data = commanded_position;
+
+      //debug only
+//      static int publish_counter = 0;
+//    sprintf(miscMsgs, "publish_counter=%d", publish_counter);
+//    publish_counter++;
+//    nh.loginfo(miscMsgs);
+  nh.spinOnce();
+
+  //populate data
+  state.data = states_msg;
+
   switch (minion_ident) {
     case SL_IDENT:
       SL_joint_encoder_pos_pub.publish( &joint_encoder_pos );
@@ -735,8 +799,10 @@ void publishAll() {
     case EL_IDENT:
       EL_joint_encoder_pos_pub.publish( &joint_encoder_pos );
       EL_stepper_count_pos_pub.publish( &stepper_count_pos );
+  nh.spinOnce();
       EL_stepper_encoder_pos_pub.publish( &stepper_encoder_pos );
       EL_torque_pub.publish( &torque );
+  nh.spinOnce();
       //      EL_joint_state_pub.publish( &BR_joint_state );
       EL_state_pub.publish( &state );
       break;
@@ -790,8 +856,8 @@ void setup() {
   }
 
   //setup publishers and subscribers
-  //    nh.getHardware()->setBaud(230400);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
-  nh.getHardware()->setBaud(115200);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
+      nh.getHardware()->setBaud(230400);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
+//  nh.getHardware()->setBaud(115200);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
   //  nh.getHardware()->setBaud(57600);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
   //    nh.getHardware()->setBaud(9600);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
   nh.initNode();
@@ -856,27 +922,32 @@ void setup() {
   nh.loginfo("V0.0.21");
 
   nh.spinOnce();
-}
+}// end setup()
 
 
 void loop() {
   //wait until you are actually connected. Ref: http://wiki.ros.org/rosserial_arduino/Tutorials/Logging
-  //  while (!nh.connected())
-  //  {
-  //    nh.spinOnce();
-  //  }
+    while (!nh.connected())
+    {
+      nh.spinOnce();
+    }
 
   //  determine motion needed and begin moving
   if (new_plan)     {
     planMovement(commanded_position);
+    nh.loginfo("finished if new_plan 1");
     new_plan = false;
+    nh.loginfo("finished if new_plan 2");
     running_state = MOVING;
+    nh.loginfo("finished if new_plan 3");
     Timer1.start();
+    nh.loginfo("finished if new_plan 4");
   }
 
   //log updates
   if (millis() > next_update) {
     // to do ?Add a if (!nh.connected()){spinOnce()} else {updateStatus()};
+    nh.loginfo("updating");
     readSensors();
     publishAll();
     next_update = millis() + UPDATE_INTERVAL;
