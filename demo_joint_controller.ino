@@ -112,9 +112,10 @@ volatile long stepper_counts = 0; //stepper position in stepper steps
 
 //stepper system constants
 const int STEPPER_STEPS_PER_REV = 200;  //stepper motor specific
+const float STEPPER_DEGREES_PER_STEP = (float) (1 / STEPPER_STEPS_PER_REV);//s.b. 1.8 degrees
 const int MICROSTEPS = 4;               //set on stepper driver
 const float GEAR_RATIO = 65.0;
-//const float STEPPER_DEGREES_PER_STEP = 0.03;//=360/200/15/4
+
 
 //encoder constants
 const int ENCODER_1_PPR = 2400;
@@ -160,7 +161,7 @@ volatile unsigned int head = 0; //index to front of my_queue
 volatile unsigned int tail = 0; //index to rear of my_queue
 
 //linear acceleration Lookup Table (LUT)
-const int NUM_PLATEAUS = 50;//  number of steps (plateaus) in acceleration LUT
+const int NUM_PLATEAUS = 10;//50;//  number of steps (plateaus) in acceleration LUT
 const float PLATEAU_DURATION = MAX_VEL / MAX_ACCEL / NUM_PLATEAUS;
 volatile long accel_LUT[NUM_PLATEAUS][3];
 
@@ -555,8 +556,8 @@ void stepOnce() {
   /*
      determines, based on state, whether or not to pulse stepper, and how fast to pulse
   */
-//    nh.loginfo("stepOnce()");
-//    nh.spinOnce();
+  //    nh.loginfo("stepOnce()");
+  //    nh.spinOnce();
 
   switch (running_state) {
     case UNPOWERED:
@@ -679,9 +680,62 @@ void planMovement(float the_commanded_position_) {
   //convert dtg_ in degrees to dtg_stepper_counts
   dtg_stepper_counts = (long) abs(dtg_ / DEGREES_PER_MICROSTEP);//good at east to here 11/17/17 12:42pm
 
+  //debug only
+  sprintf(miscMsgs, "dtg_stepper_counts=%d", dtg_stepper_counts);
+  nh.loginfo(miscMsgs);
+
+
+  //debug
+  nh.loginfo("finished populating LUT");
+  nh.spinOnce();
+
+  //debug loginfo
+  char result3[8]; // Buffer big enough for 7-character float
+  dtostrf(PLATEAU_DURATION, 6, 2, result3); // Leave room for too large numbers!
+  nh.loginfo("PLATEAU_DURATION=");//this works
+  nh.loginfo(result3);//this works
+  nh.spinOnce();
+
+  //debug print out accel_LUT stuff
+  for (int j = 0; j < NUM_PLATEAUS; j++) {
     //debug only
-    sprintf(miscMsgs, "dtg_stepper_counts=%d", dtg_stepper_counts);
+    //    sprintf(miscMsgs, "accel_LUT[1][0]=%d", accel_LUT[j][0]);
+    sprintf(miscMsgs, "accel_LUT[%d", j);
+    sprintf(miscMsgs2, "][0]=%d", accel_LUT[j][0]);
+    strcat(miscMsgs, miscMsgs2);
     nh.loginfo(miscMsgs);
+    nh.spinOnce();
+  }
+  nh.loginfo("");
+  nh.spinOnce();
+
+  //debug print out accel_LUT stuff
+  for (int j = 0; j < NUM_PLATEAUS; j++) {
+    //debug only
+    //    sprintf(miscMsgs, "accel_LUT[1][0]=%d", accel_LUT[j][0]);
+    sprintf(miscMsgs, "accel_LUT[%d", j);
+    sprintf(miscMsgs2, "][1]=%d", accel_LUT[j][1]);
+    strcat(miscMsgs, miscMsgs2);
+    nh.loginfo(miscMsgs);
+    nh.spinOnce();
+  }
+  nh.loginfo("");
+  nh.spinOnce();
+
+  //debug print out accel_LUT stuff
+  for (int j = 0; j < NUM_PLATEAUS; j++) {
+    //debug only
+    //    sprintf(miscMsgs, "accel_LUT[1][0]=%d", accel_LUT[j][0]);
+    sprintf(miscMsgs, "accel_LUT[%d", j);
+    sprintf(miscMsgs2, "][2]=%d", accel_LUT[j][2]);
+    strcat(miscMsgs, miscMsgs2);
+    nh.loginfo(miscMsgs);
+    nh.spinOnce();
+  }
+
+  //debug
+  nh.loginfo("finished printing LUT");
+  nh.spinOnce();
 
   /*
      iterate through accel_LUT lookup table to determine lowest plateau speed level
@@ -699,11 +753,33 @@ void planMovement(float the_commanded_position_) {
     }
   }
 
+  //debug loginfo
+  char result4[8]; // Buffer big enough for 7-character float
+  dtostrf(calculated_duration_, 6, 2, result4); // Leave room for too large numbers!
+  nh.loginfo("calculated_duration_=");//this works
+  nh.loginfo(result4);//this works
+  nh.spinOnce();
+
+  //debug only
+  sprintf(miscMsgs, "cruise_plateau_index=%d", cruise_plateau_index);
+  nh.loginfo(miscMsgs);
+  nh.spinOnce();
+
   nh.loginfo("finished iterating LUT");
-    
+
   //calculate accelerate until and decelerate after points in terms of stepper counts
   accel_until_stepper_counts = dtg_stepper_counts - accel_LUT[cruise_plateau_index][2];
   decel_after_stepper_counts = accel_LUT[cruise_plateau_index][2];
+
+  //debug only
+  sprintf(miscMsgs, "accel_until_stepper_counts=%d", accel_until_stepper_counts);
+  nh.loginfo(miscMsgs);
+  nh.spinOnce();
+  //debug only
+  sprintf(miscMsgs, "decel_after_stepper_counts=%d", decel_after_stepper_counts);
+  nh.loginfo(miscMsgs);
+  nh.spinOnce();
+
 
   nh.loginfo("finished accel_until");
   nh.spinOnce();
@@ -713,7 +789,7 @@ void planMovement(float the_commanded_position_) {
 
   nh.loginfo("cruising_stepper_counts");
   nh.spinOnce();
-  
+
   //get direction of motion. positive distance defined as CW, negative as CCW
   if (dtg_ > 0) {
     direction_CW = true;
@@ -733,7 +809,9 @@ void planMovement(float the_commanded_position_) {
   nh.loginfo(miscMsgs);
 
   //set Timer1 to period specified in first plateau
-//  Timer1.setPeriod(accel_LUT[1][0]);
+  //WORKING HERE 11/18/17
+  Timer1.setPeriod(accel_LUT[1][0]);//this crashes
+  //  Timer1.setPeriod(5000);//this works
   nh.loginfo("setPeriod");
   nh.spinOnce();
 
@@ -768,11 +846,11 @@ void publishAll() {
   //publish stuff for this joint
   //  torque.data = commanded_position;
 
-      //debug only
-//      static int publish_counter = 0;
-//    sprintf(miscMsgs, "publish_counter=%d", publish_counter);
-//    publish_counter++;
-//    nh.loginfo(miscMsgs);
+  //debug only
+  //      static int publish_counter = 0;
+  //    sprintf(miscMsgs, "publish_counter=%d", publish_counter);
+  //    publish_counter++;
+  //    nh.loginfo(miscMsgs);
   nh.spinOnce();
 
   //populate data
@@ -799,10 +877,10 @@ void publishAll() {
     case EL_IDENT:
       EL_joint_encoder_pos_pub.publish( &joint_encoder_pos );
       EL_stepper_count_pos_pub.publish( &stepper_count_pos );
-  nh.spinOnce();
+      nh.spinOnce();
       EL_stepper_encoder_pos_pub.publish( &stepper_encoder_pos );
       EL_torque_pub.publish( &torque );
-  nh.spinOnce();
+      nh.spinOnce();
       //      EL_joint_state_pub.publish( &BR_joint_state );
       EL_state_pub.publish( &state );
       break;
@@ -830,34 +908,11 @@ void setup() {
   bitWrite(minion_ident, 2, digitalRead(IDENT_PIN_4));
   bitWrite(minion_ident, 3, digitalRead(IDENT_PIN_8));
 
-  //polpulate acceleration LookUp Table accel_LUT
-  long period_;           //time between stepper pulses in microseconds
-  float vel_deg_per_sec_; //velocity at a particular plateau in joint degrees per second
-  float vel_steps_per_sec_;//
-  long num_pulses_;       //number of pulses in a particular plateau
-  long cum_num_pulses_ = 0;   //cumulative number of pulses
-  for (int i = 0; i < NUM_PLATEAUS; i++) {
-    //first column is period
-    vel_deg_per_sec_ = i * MAX_ACCEL * PLATEAU_DURATION;
-    vel_steps_per_sec_ = ( vel_deg_per_sec_ * GEAR_RATIO / DEGREES_PER_MICROSTEP ) * MICROSTEPS;
-    period_ = (long) (1 / vel_steps_per_sec_ ) * 1000000;
-    accel_LUT[0][i] = period_;
-    //second column is number of pulses in this plateau
-    num_pulses_ = (long) PLATEAU_DURATION * vel_steps_per_sec_;
-    accel_LUT[1][i] = num_pulses_;
-    //third column is cumlative number of pulses
-    if (i == 0) {
-      cum_num_pulses_ = 0;
-    }
-    else {
-      cum_num_pulses_ = accel_LUT[2][i - 1] + num_pulses_;
-    }
-    accel_LUT[2][i] = cum_num_pulses_;
-  }
+
 
   //setup publishers and subscribers
-      nh.getHardware()->setBaud(230400);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
-//  nh.getHardware()->setBaud(115200);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
+  nh.getHardware()->setBaud(230400);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
+  //  nh.getHardware()->setBaud(115200);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
   //  nh.getHardware()->setBaud(57600);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
   //    nh.getHardware()->setBaud(9600);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
   nh.initNode();
@@ -865,7 +920,6 @@ void setup() {
 
   //setup timer
   //  Timer7.attachInterrupt(stepOnce).setPeriod(0).start(); //delay(50);      //fires steppers at freqs specified in queue
-
 
   //use swtich to only setup pubs and subs needed for this minion's joint
   switch (minion_ident) {
@@ -919,7 +973,62 @@ void setup() {
   Timer1.initialize(500000);  // initialize timer1, and set a 1/2 second period
   Timer1.attachInterrupt(stepOnce);
 
-  nh.loginfo("V0.0.21");
+  //    accel_LUT[0][0] =  0;
+  //    accel_LUT[1][0] =  1;
+  //    accel_LUT[2][0] =  2;
+  //    accel_LUT[3][0] =  3;
+  //    accel_LUT[4][0] =  4;
+  //    accel_LUT[5][0] =  5;
+  //    accel_LUT[6][0] =  6;
+  //    accel_LUT[7][0] =  7;
+  //    accel_LUT[8][0] =  8;
+  //    accel_LUT[9][0] =  9;
+
+  //polpulate acceleration LookUp Table accel_LUT
+  long period_;           //time between stepper pulses in microseconds
+  float vel_deg_per_sec_; //velocity at a particular plateau in joint degrees per second
+  float vel_steps_per_sec_;//
+  long num_pulses_;       //number of pulses in a particular plateau
+  long cum_num_pulses_ = 0;   //cumulative number of pulses
+    for (int i = 0; i < NUM_PLATEAUS; i++) {
+      //first column is period
+      vel_deg_per_sec_ = i * MAX_ACCEL * PLATEAU_DURATION;
+      vel_steps_per_sec_ = vel_deg_per_sec_ / DEGREES_PER_MICROSTEP;
+      period_ = (long) ((1 / vel_steps_per_sec_ ) * 1000000);//works
+      accel_LUT[i][0] = period_;
+      //second column is number of pulses in this plateau
+      num_pulses_ = (long) (PLATEAU_DURATION * vel_steps_per_sec_);
+      accel_LUT[i][1] = num_pulses_;
+      //third column is cumlative number of pulses
+      if (i == 0) {
+        cum_num_pulses_ = 0;
+      }
+      else {
+        cum_num_pulses_ = accel_LUT[i - 1][2] + num_pulses_;
+      }
+      accel_LUT[i][2] = cum_num_pulses_;
+    }
+
+
+  //  //debug
+//  for (int i = 0; i < NUM_PLATEAUS; i++) {
+//    //first column is period
+//    accel_LUT[i][0] = (long)(i * 10);
+//    //second column is number of pulses in this plateau
+//    num_pulses_ = (long)(i * 100);
+//    accel_LUT[i][1] = num_pulses_;
+//    //third column is cumlative number of pulses
+//    if (i == 0) {
+//      cum_num_pulses_ = 0;
+//    }
+//    else {
+//      cum_num_pulses_ = accel_LUT[i - 1][2] + num_pulses_;
+//    }
+//    accel_LUT[i][2] = cum_num_pulses_;
+//  }
+
+
+  nh.loginfo("V0.0.22");
 
   nh.spinOnce();
 }// end setup()
@@ -927,10 +1036,10 @@ void setup() {
 
 void loop() {
   //wait until you are actually connected. Ref: http://wiki.ros.org/rosserial_arduino/Tutorials/Logging
-    while (!nh.connected())
-    {
-      nh.spinOnce();
-    }
+  while (!nh.connected())
+  {
+    nh.spinOnce();
+  }
 
   //  determine motion needed and begin moving
   if (new_plan)     {
