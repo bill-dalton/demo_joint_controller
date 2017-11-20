@@ -129,6 +129,8 @@ const float ENCODER_1_COUNTS_PER_STEPPER_COUNT = 36.0;//= GEAR_REDUCTION_RATIO_S
 //motion constants
 const float MAX_VEL = 25.0;   //degrees/sec
 const float MAX_ACCEL = 10.0; //degrees/sec^2
+const float MIN_TIME_TO_REACH_MAX_VEL = MAX_VEL / MAX_ACCEL;//in seconds
+const float MIN_TRAVEL_TO_REACH_MAX_VEL = MIN_TIME_TO_REACH_MAX_VEL * ((MAX_VEL + MAX_ACCEL) / 2);
 const float DEGREES_PER_MICROSTEP = 0.006923;// = 0.03; //= 360 / (STEPPER_STEPS_PER_REV * MICROSTEPS) / GEAR_RATIO;
 const float POSITION_HOLD_TOLERANCE = 0.2;    //in degrees
 const long POSITION_ADJUSTMENT_SPEED = 5000;  //stepper period interval speed at which to make position adjustments
@@ -281,7 +283,7 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
   //  strcat(miscMsgs2, inbound_message);
   //  state.data = miscMsgs2;
 
-  //process first token in inbound_message which is required duration in float seconds
+  //process first token in inbound_message which is unique command id number
   //http://jhaskellsblog.blogspot.com/2011/06/parsing-quick-guide-to-strtok-there-are.html
   //this whole test section works and returns torque of 5.230000
   //char test_message[] = "6.23,4.56,7.89";
@@ -290,7 +292,6 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
   command = strtok(inbound_message, ",");//works
   //joint_commands_[0] = atof(command);
   joint_commands_[0] = atoi(command);//retrieves unique command message number
-  //  torque.data = joint_commands_[0];//only used for debug
 
   //check this is not a repeated command
   current_command_number_ = joint_commands_[0];
@@ -306,11 +307,11 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
     return;
   }
 
-  //debug loginfo
-  char result2[8]; // Buffer big enough for 7-character float
-  dtostrf(joint_commands_[0], 6, 2, result2); // Leave room for too large numbers!
-  nh.loginfo("joint_commands_[0]=");//this works
-  nh.loginfo(result2);//this works
+  //  //debug loginfo
+  //  char result2[8]; // Buffer big enough for 7-character float
+  //  dtostrf(joint_commands_[0], 6, 2, result2); // Leave room for too large numbers!
+  //  nh.loginfo("joint_commands_[0]=");//this works
+  //  nh.loginfo(result2);//this works
 
   //  //debug pub to state2 topic
   //  miscMsgs3[0] = (char)0;  //"empties msg by setting first char in string to 0
@@ -318,7 +319,7 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
   //  state2.data = miscMsgs3;
 
   //process remaining tokens in inbound_message
-  int joint_index = 1;//note starts at 1 because required duration has already been parsed as j0int_index=0
+  int joint_index = 1;//note starts at 1 because required duration has already been parsed as joint_index=0
   while (command != 0)
   {
     command = strtok(0, ",");//note "0" i.e. null as input for subsequent calls to strtok()
@@ -348,8 +349,14 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
   }//end switch case
 
   //assign required duration and commanded position
-  required_duration = joint_commands_[0];
+  required_duration = joint_commands_[1];
   commanded_position = joint_commands_[joint_index];
+
+  //debug loginfo commanded position
+  char result5[8]; // Buffer big enough for 7-character float
+  dtostrf(required_duration, 6, 2, result5); // Leave room for too large numbers!
+  nh.loginfo("required_duration=");//this works
+  nh.loginfo(result5);//this works
 
   //debug loginfo commanded position
   char result[8]; // Buffer big enough for 7-character float
@@ -650,7 +657,7 @@ float getCurrentPos ( long encoder_position ) {
   */
   //To Do - reinstate after calibration routine finsihed
   //  float float_pos_ = ENCODER_1_DEGREES_PER_COUNT * (encoder_1_pos - (max_doe_counts / 2));
-  float float_pos_ = (float) ENCODER_1_DEGREES_PER_COUNT * encoder_1_pos;
+  float float_pos_ = (float) (ENCODER_1_DEGREES_PER_COUNT * encoder_1_pos);
   return float_pos_;
 }
 
@@ -660,7 +667,13 @@ void planMovement(float the_commanded_position_) {
      accel_until_stepper_counts and accel_until_stepper_counts
   */
   float dtg_ = 0.0;  //joint distance to travel in signed degrees. Sign indicates direction of movement
-
+  long dtg_stepper_counts_ = 0; //joint distance to travel in steps in absolute value as long
+  float min_travel_time_ = 0.1; //in seconds using MAX_VEL and MAX_ACCEL and accel_LUT
+  long steps_to_reach_max_vel_ = 0;//from accel_LUT
+  long steps_to_reach_reduced_cruise_vel_ = 0;//from accel_LUT
+  long cruise_steps_at_max_vel_ = 0;
+  long cruise_steps_at_reduced_vel_ = 0;
+  
   nh.loginfo("planMovement");
 
   //stop Timer1 from firing pulses while plan is made
@@ -676,18 +689,16 @@ void planMovement(float the_commanded_position_) {
   nh.loginfo("dtg_=");//this works
   nh.loginfo(result);//this works
 
-
-  //convert dtg_ in degrees to dtg_stepper_counts
-  dtg_stepper_counts = (long) abs(dtg_ / DEGREES_PER_MICROSTEP);//good at east to here 11/17/17 12:42pm
+  //convert dtg_ in degrees to dtg_stepper_counts_
+  dtg_stepper_counts_ = (long) abs(dtg_ / DEGREES_PER_MICROSTEP);
 
   //debug only
-  sprintf(miscMsgs, "dtg_stepper_counts=%d", dtg_stepper_counts);
+  sprintf(miscMsgs, "dtg_stepper_counts_=%d", dtg_stepper_counts_);
   nh.loginfo(miscMsgs);
 
-
-  //debug
-  nh.loginfo("finished populating LUT");
-  nh.spinOnce();
+  //  //debug
+  //  nh.loginfo("finished populating LUT");
+  //  nh.spinOnce();
 
   //debug loginfo
   char result3[8]; // Buffer big enough for 7-character float
@@ -733,9 +744,81 @@ void planMovement(float the_commanded_position_) {
     nh.spinOnce();
   }
 
-  //debug
-  nh.loginfo("finished printing LUT");
+  //  //debug
+  //  nh.loginfo("finished printing LUT");
+  //  nh.spinOnce();
+
+  //calculate minimum number of steps to accel to max velocity
+  steps_to_reach_max_vel_ = accel_LUT[NUM_PLATEAUS - 1][2];//correct
+
+  //debug only
+  sprintf(miscMsgs, "steps_to_reach_max_vel_=%d", steps_to_reach_max_vel_);
+  nh.loginfo(miscMsgs);
   nh.spinOnce();
+
+  //determine min_travel_time for this movement
+  if (dtg_stepper_counts_ > (2 * steps_to_reach_max_vel_)) {
+    //in this case, can accel to max vel, hence there will be a cruise phase at max velocity
+    //calculate accel and decel time at max accel
+    min_travel_time_ = (float)(2 * NUM_PLATEAUS * PLATEAU_DURATION);
+
+    //debug only
+    sprintf(miscMsgs, "2nd reading dtg_stepper_counts_=%d", dtg_stepper_counts_);
+    nh.loginfo(miscMsgs);
+
+    //calc cruise steps
+    cruise_steps_at_max_vel_ = (dtg_stepper_counts_ - ( 2 * steps_to_reach_max_vel_));//correct
+
+    //calc cruise time and add to accel+decel time. Note LUT value is period (ie time) between steps in microseconds
+    min_travel_time_ += (float)(cruise_steps_at_max_vel_ * accel_LUT[NUM_PLATEAUS - 1][0]) / 1000000.0;
+
+    //calc cruise_plateau_index - for this case it will be max vel
+    cruise_plateau_index = NUM_PLATEAUS - 1;
+  }
+  else {
+    //else cannot accel to max vel within steps to be moved, hence must figure short cruise phase at lower velocity
+    //iterate through LUT t find first plateau that will move enough steps
+    for (int j = 1; j < NUM_PLATEAUS; j++) {
+      if (dtg_stepper_counts_ < 2 * accel_LUT[j][2]) {
+        //this plateau will move more steps than are required - use next slowest plateau with short cruise segment
+        cruise_plateau_index = j - 1;
+        break;
+      }
+    }
+    //debug only
+    sprintf(miscMsgs, "cruise_plateau_index=%d", cruise_plateau_index);
+    nh.loginfo(miscMsgs);
+    nh.spinOnce();
+
+    //calc cruise steps
+    steps_to_reach_reduced_cruise_vel_ = accel_LUT[cruise_plateau_index][2];
+    cruise_steps_at_reduced_vel_ = (dtg_stepper_counts_ - ( 2 * steps_to_reach_reduced_cruise_vel_));
+
+    //calculate accel and decel time
+    min_travel_time_ = (float)(2 * cruise_plateau_index * PLATEAU_DURATION);
+
+    //calc cruise time and add to accel+decel time. Note LUT value is period (ie time) between steps in microseconds
+    min_travel_time_ += (float)(cruise_steps_at_reduced_vel_ * accel_LUT[cruise_plateau_index][0]) / 1000000.0;
+  
+  }
+
+  //debug only
+  sprintf(miscMsgs, "cruise_steps_at_reduced_vel_=%d", cruise_steps_at_reduced_vel_);
+  nh.loginfo(miscMsgs);
+  nh.spinOnce();
+
+  //debug loginfo
+  char result6[8]; // Buffer big enough for 7-character float
+  dtostrf(min_travel_time_, 6, 2, result6); // Leave room for too large numbers!
+  nh.loginfo("min_travel_time_=");//this works
+  nh.loginfo(result6);//this works
+  nh.spinOnce();
+
+
+
+
+
+
 
   /*
      iterate through accel_LUT lookup table to determine lowest plateau speed level
@@ -765,10 +848,10 @@ void planMovement(float the_commanded_position_) {
   nh.loginfo(miscMsgs);
   nh.spinOnce();
 
-  nh.loginfo("finished iterating LUT");
+  //  nh.loginfo("finished iterating LUT");
 
   //calculate accelerate until and decelerate after points in terms of stepper counts
-  accel_until_stepper_counts = dtg_stepper_counts - accel_LUT[cruise_plateau_index][2];
+  accel_until_stepper_counts = dtg_stepper_counts_ - accel_LUT[cruise_plateau_index][2];
   decel_after_stepper_counts = accel_LUT[cruise_plateau_index][2];
 
   //debug only
@@ -780,14 +863,15 @@ void planMovement(float the_commanded_position_) {
   nh.loginfo(miscMsgs);
   nh.spinOnce();
 
-
-  nh.loginfo("finished accel_until");
-  nh.spinOnce();
+  //  nh.loginfo("finished accel_until");
+  //  nh.spinOnce();
 
   //calculate exact number of cruise stepper counts
-  cruising_stepper_counts = dtg_stepper_counts - (2 * accel_LUT[cruise_plateau_index][2]);
+  cruising_stepper_counts = dtg_stepper_counts_ - (2 * accel_LUT[cruise_plateau_index][2]);
 
-  nh.loginfo("cruising_stepper_counts");
+  //debug only
+  sprintf(miscMsgs, "cruising_stepper_counts=%d", cruising_stepper_counts);
+  nh.loginfo(miscMsgs);
   nh.spinOnce();
 
   //get direction of motion. positive distance defined as CW, negative as CCW
@@ -804,21 +888,20 @@ void planMovement(float the_commanded_position_) {
   }
   nh.spinOnce();
 
-  //debug only
-  sprintf(miscMsgs, "accel_LUT[1][0]=%d", accel_LUT[1][0]);
-  nh.loginfo(miscMsgs);
-
   //set Timer1 to period specified in first plateau
-  //WORKING HERE 11/18/17
-  Timer1.setPeriod(accel_LUT[1][0]);//this crashes
+  Timer1.setPeriod(accel_LUT[1][0]);
   //  Timer1.setPeriod(5000);//this works
   nh.loginfo("setPeriod");
   nh.spinOnce();
 
   //initilaize first plateau parameters
-  steps_remaining = dtg_stepper_counts;
+  steps_remaining = dtg_stepper_counts_;
   current_plateau_index = 1;
   current_plateau_steps_remaining = accel_LUT[current_plateau_index][1];
+
+  //debug only
+  sprintf(miscMsgs, "3rd reading dtg_stepper_counts_=%d", dtg_stepper_counts_);
+  nh.loginfo(miscMsgs);
 
   nh.loginfo("exiting planMovement()");
   nh.spinOnce();
@@ -973,60 +1056,30 @@ void setup() {
   Timer1.initialize(500000);  // initialize timer1, and set a 1/2 second period
   Timer1.attachInterrupt(stepOnce);
 
-  //    accel_LUT[0][0] =  0;
-  //    accel_LUT[1][0] =  1;
-  //    accel_LUT[2][0] =  2;
-  //    accel_LUT[3][0] =  3;
-  //    accel_LUT[4][0] =  4;
-  //    accel_LUT[5][0] =  5;
-  //    accel_LUT[6][0] =  6;
-  //    accel_LUT[7][0] =  7;
-  //    accel_LUT[8][0] =  8;
-  //    accel_LUT[9][0] =  9;
-
   //polpulate acceleration LookUp Table accel_LUT
   long period_;           //time between stepper pulses in microseconds
   float vel_deg_per_sec_; //velocity at a particular plateau in joint degrees per second
   float vel_steps_per_sec_;//
   long num_pulses_;       //number of pulses in a particular plateau
   long cum_num_pulses_ = 0;   //cumulative number of pulses
-    for (int i = 0; i < NUM_PLATEAUS; i++) {
-      //first column is period
-      vel_deg_per_sec_ = i * MAX_ACCEL * PLATEAU_DURATION;
-      vel_steps_per_sec_ = vel_deg_per_sec_ / DEGREES_PER_MICROSTEP;
-      period_ = (long) ((1 / vel_steps_per_sec_ ) * 1000000);//works
-      accel_LUT[i][0] = period_;
-      //second column is number of pulses in this plateau
-      num_pulses_ = (long) (PLATEAU_DURATION * vel_steps_per_sec_);
-      accel_LUT[i][1] = num_pulses_;
-      //third column is cumlative number of pulses
-      if (i == 0) {
-        cum_num_pulses_ = 0;
-      }
-      else {
-        cum_num_pulses_ = accel_LUT[i - 1][2] + num_pulses_;
-      }
-      accel_LUT[i][2] = cum_num_pulses_;
+  for (int i = 0; i < NUM_PLATEAUS; i++) {
+    //first column is period
+    vel_deg_per_sec_ = i * MAX_ACCEL * PLATEAU_DURATION;
+    vel_steps_per_sec_ = vel_deg_per_sec_ / DEGREES_PER_MICROSTEP;
+    period_ = (long) ((1 / vel_steps_per_sec_ ) * 1000000);//works
+    accel_LUT[i][0] = period_;
+    //second column is number of pulses in this plateau
+    num_pulses_ = (long) (PLATEAU_DURATION * vel_steps_per_sec_);
+    accel_LUT[i][1] = num_pulses_;
+    //third column is cumlative number of pulses
+    if (i == 0) {
+      cum_num_pulses_ = 0;
     }
-
-
-  //  //debug
-//  for (int i = 0; i < NUM_PLATEAUS; i++) {
-//    //first column is period
-//    accel_LUT[i][0] = (long)(i * 10);
-//    //second column is number of pulses in this plateau
-//    num_pulses_ = (long)(i * 100);
-//    accel_LUT[i][1] = num_pulses_;
-//    //third column is cumlative number of pulses
-//    if (i == 0) {
-//      cum_num_pulses_ = 0;
-//    }
-//    else {
-//      cum_num_pulses_ = accel_LUT[i - 1][2] + num_pulses_;
-//    }
-//    accel_LUT[i][2] = cum_num_pulses_;
-//  }
-
+    else {
+      cum_num_pulses_ = accel_LUT[i - 1][2] + num_pulses_;
+    }
+    accel_LUT[i][2] = cum_num_pulses_;
+  }
 
   nh.loginfo("V0.0.22");
 
@@ -1044,13 +1097,13 @@ void loop() {
   //  determine motion needed and begin moving
   if (new_plan)     {
     planMovement(commanded_position);
-    nh.loginfo("finished if new_plan 1");
+    //    nh.loginfo("finished if new_plan 1");
     new_plan = false;
-    nh.loginfo("finished if new_plan 2");
+    //    nh.loginfo("finished if new_plan 2");
     running_state = MOVING;
-    nh.loginfo("finished if new_plan 3");
+    //    nh.loginfo("finished if new_plan 3");
     Timer1.start();
-    nh.loginfo("finished if new_plan 4");
+    //    nh.loginfo("finished if new_plan 4");
   }
 
   //log updates
