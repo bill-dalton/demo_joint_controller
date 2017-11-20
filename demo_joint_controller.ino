@@ -671,9 +671,11 @@ void planMovement(float the_commanded_position_) {
   float min_travel_time_ = 0.1; //in seconds using MAX_VEL and MAX_ACCEL and accel_LUT
   long steps_to_reach_max_vel_ = 0;//from accel_LUT
   long steps_to_reach_reduced_cruise_vel_ = 0;//from accel_LUT
+  long steps_to_reach_cruise_ = 0;
   long cruise_steps_at_max_vel_ = 0;
   long cruise_steps_at_reduced_vel_ = 0;
-  
+  long cruise_steps_ = 0;
+
   nh.loginfo("planMovement");
 
   //stop Timer1 from firing pulses while plan is made
@@ -768,16 +770,18 @@ void planMovement(float the_commanded_position_) {
 
     //calc cruise steps
     cruise_steps_at_max_vel_ = (dtg_stepper_counts_ - ( 2 * steps_to_reach_max_vel_));//correct
+    //    cruise_steps_ = (dtg_stepper_counts_ - ( 2 * steps_to_reach_max_vel_));//correct
 
     //calc cruise time and add to accel+decel time. Note LUT value is period (ie time) between steps in microseconds
     min_travel_time_ += (float)(cruise_steps_at_max_vel_ * accel_LUT[NUM_PLATEAUS - 1][0]) / 1000000.0;
+    //    min_travel_time_ += (float)(cruise_steps_ * accel_LUT[NUM_PLATEAUS - 1][0]) / 1000000.0;
 
     //calc cruise_plateau_index - for this case it will be max vel
     cruise_plateau_index = NUM_PLATEAUS - 1;
   }
   else {
     //else cannot accel to max vel within steps to be moved, hence must figure short cruise phase at lower velocity
-    //iterate through LUT t find first plateau that will move enough steps
+    //iterate through LUT to find first plateau that will move enough steps
     for (int j = 1; j < NUM_PLATEAUS; j++) {
       if (dtg_stepper_counts_ < 2 * accel_LUT[j][2]) {
         //this plateau will move more steps than are required - use next slowest plateau with short cruise segment
@@ -785,22 +789,26 @@ void planMovement(float the_commanded_position_) {
         break;
       }
     }
-    //debug only
-    sprintf(miscMsgs, "cruise_plateau_index=%d", cruise_plateau_index);
-    nh.loginfo(miscMsgs);
-    nh.spinOnce();
 
     //calc cruise steps
     steps_to_reach_reduced_cruise_vel_ = accel_LUT[cruise_plateau_index][2];
     cruise_steps_at_reduced_vel_ = (dtg_stepper_counts_ - ( 2 * steps_to_reach_reduced_cruise_vel_));
+    //    steps_to_reach_cruise_ = accel_LUT[cruise_plateau_index][2];
+    //    cruise_steps_ = (dtg_stepper_counts_ - ( 2 * steps_to_reach_cruise_));
 
     //calculate accel and decel time
     min_travel_time_ = (float)(2 * cruise_plateau_index * PLATEAU_DURATION);
 
     //calc cruise time and add to accel+decel time. Note LUT value is period (ie time) between steps in microseconds
     min_travel_time_ += (float)(cruise_steps_at_reduced_vel_ * accel_LUT[cruise_plateau_index][0]) / 1000000.0;
-  
+    //    min_travel_time_ += (float)(cruise_steps_ * accel_LUT[cruise_plateau_index][0]) / 1000000.0;
+
   }
+
+  //debug only
+  sprintf(miscMsgs, "cruise_plateau_index=%d", cruise_plateau_index);
+  nh.loginfo(miscMsgs);
+  nh.spinOnce();
 
   //debug only
   sprintf(miscMsgs, "cruise_steps_at_reduced_vel_=%d", cruise_steps_at_reduced_vel_);
@@ -814,41 +822,60 @@ void planMovement(float the_commanded_position_) {
   nh.loginfo(result6);//this works
   nh.spinOnce();
 
-
-
-
-
-
-
-  /*
-     iterate through accel_LUT lookup table to determine lowest plateau speed level
-     that meets required duration of movement
-  */
-  float calculated_duration_ = 0.0;
-  for (int i = 1; i < NUM_PLATEAUS; i++) {
-    //starts at i=1 because first plateau has zeros in it
-    //first, calculate time to accel to, then decel from, the ith plateau
-    calculated_duration_ = 2 * i * PLATEAU_DURATION;
-    //then find the first index when this accel+decl is GREATER than the required duration.
-    if (calculated_duration_ > required_duration) {
-      //select the plateau that is one level faster than this one
-      cruise_plateau_index = i - 1;
+  //now determine if min_travel_time_ is more or less than required_duration
+  if (required_duration < min_travel_time_) {
+    //operate as fast as possible - this joint will take longer than required
+    //math has already been done above for:
+    //min_travel_time_
+    //cruise_plateau_index
+    //cruise_steps_at_max_vel_
+  }
+  else {
+    /*
+       this joint will operate at slower speed than max to complete movement in as
+       close to required time as possible
+       iterate through accel_LUT lookup table to determine lowest plateau speed level
+       that meets required duration of movement
+    */
+    float calculated_duration_ = 0.0;
+    for (int i = 1; i < NUM_PLATEAUS; i++) {
+      //starts at i=1 because first plateau has zeros in it
+      //first, calculate time to accel to, then decel from, the ith plateau
+      calculated_duration_ = 2 * i * PLATEAU_DURATION;
+      //then add the cruising time
+      steps_to_reach_reduced_cruise_vel_ = accel_LUT[i][2];
+      cruise_steps_at_reduced_vel_ = dtg_stepper_counts_ - (2 * steps_to_reach_reduced_cruise_vel_);
+      calculated_duration_ += (float)(cruise_steps_at_reduced_vel_ * accel_LUT[i][0]) / 1000000.0;
+      //now find the first index when this calculated duration is less than the required duration.
+      if (calculated_duration_ < required_duration) {
+        //this will be the cruise plateau
+        cruise_plateau_index = i;
+        break;
+      }
     }
+
+    //debug loginfo
+    char result4[8]; // Buffer big enough for 7-character float
+    dtostrf(calculated_duration_, 6, 2, result4); // Leave room for too large numbers!
+    nh.loginfo("calculated_duration_=");//this works
+    nh.loginfo(result4);//this works
+    nh.spinOnce();
+
+    //debug only
+    sprintf(miscMsgs, "cruise_plateau_index=%d", cruise_plateau_index);
+    nh.loginfo(miscMsgs);
+    nh.spinOnce();
+
+    //  nh.loginfo("finished iterating LUT");
   }
 
-  //debug loginfo
-  char result4[8]; // Buffer big enough for 7-character float
-  dtostrf(calculated_duration_, 6, 2, result4); // Leave room for too large numbers!
-  nh.loginfo("calculated_duration_=");//this works
-  nh.loginfo(result4);//this works
-  nh.spinOnce();
+  //outputs needed
+  //cruise_plateau_index
+  //calculated_duration_ or global version thereof
+  //accel_until_stepper_counts
+  //decel_after_stepper_counts
+  //cruising_stepper_counts
 
-  //debug only
-  sprintf(miscMsgs, "cruise_plateau_index=%d", cruise_plateau_index);
-  nh.loginfo(miscMsgs);
-  nh.spinOnce();
-
-  //  nh.loginfo("finished iterating LUT");
 
   //calculate accelerate until and decelerate after points in terms of stepper counts
   accel_until_stepper_counts = dtg_stepper_counts_ - accel_LUT[cruise_plateau_index][2];
@@ -868,7 +895,6 @@ void planMovement(float the_commanded_position_) {
 
   //calculate exact number of cruise stepper counts
   cruising_stepper_counts = dtg_stepper_counts_ - (2 * accel_LUT[cruise_plateau_index][2]);
-
   //debug only
   sprintf(miscMsgs, "cruising_stepper_counts=%d", cruising_stepper_counts);
   nh.loginfo(miscMsgs);
