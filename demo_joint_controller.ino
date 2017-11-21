@@ -97,7 +97,7 @@ char yellow_torque_msg[] = "yellow";
 char red_torque_msg[] = "red";
 
 //flags
-bool new_plan = false;
+volatile bool new_plan = false;
 
 //debug messages
 char miscMsgs[20];
@@ -277,6 +277,7 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
   //debug only
   nh.loginfo("InbdMsg=");
   nh.loginfo(inbound_message);//this now works
+  nh.spinOnce();
 
   //  //debug load state.data for eventual publishing by updateStatus()
   //  miscMsgs2[0] = (char)0;  //"empties msg by setting first char in string to 0
@@ -363,6 +364,23 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
   dtostrf(commanded_position, 6, 2, result); // Leave room for too large numbers!
   nh.loginfo("commanded_position=");//this works
   nh.loginfo(result);//this works
+
+  //check for Command 400 to set all values to zero
+  if (commanded_position > 399.5 && commanded_position < 400.5) {
+    //Command 400 - set all values to zero
+    encoder_1_pos = 0;
+    encoder_2_pos = 0;
+    stepper_counts = 0;
+    current_pos = 0.0;
+    dtg_stepper_counts = 0;
+    steps_remaining = 0;
+    //    previous_commanded_position_ = 0.0;
+    commanded_position = 0.0;
+    new_plan = false;
+
+    //log
+    nh.loginfo("reset all vars to zero");
+  }// end of command 400
 
 }// end commandedPositionCallback()
 
@@ -557,14 +575,17 @@ void pulseStepper() {
   else {
     stepper_counts--;
   }
+//  nh.loginfo("pulseStepper");
+//  nh.spinOnce();
+
 } // end pulseStepper()
 
 void stepOnce() {
   /*
      determines, based on state, whether or not to pulse stepper, and how fast to pulse
   */
-  //    nh.loginfo("stepOnce()");
-  //    nh.spinOnce();
+//  nh.loginfo("stepOnce()");
+//  nh.spinOnce();
 
   switch (running_state) {
     case UNPOWERED:
@@ -590,8 +611,11 @@ void stepOnce() {
           //still accelerating, so move to next fastest plateau
           current_plateau_index++;
           Timer1.setPeriod(accel_LUT[current_plateau_index][0]);
+          //debug
+          nh.loginfo("cpi++");
+          nh.spinOnce();
           //have we entered cruise phase?
-          if (current_plateau_index = cruise_plateau_index) {
+          if (current_plateau_index == cruise_plateau_index) {
             //Yes, set up for cruise phase
             current_plateau_steps_remaining = cruising_stepper_counts;
           }
@@ -606,6 +630,9 @@ void stepOnce() {
             //yes, still decelerating, so move to next slowest plateau
             current_plateau_index--;
             Timer1.setPeriod(accel_LUT[current_plateau_index][0]);
+            //debug
+            nh.loginfo("cpi--");
+            nh.spinOnce();
             current_plateau_steps_remaining = accel_LUT[current_plateau_index][1];
           }
           else {
@@ -677,9 +704,10 @@ void planMovement(float the_commanded_position_) {
   long cruise_steps_ = 0;
 
   nh.loginfo("planMovement");
+  nh.spinOnce();
 
   //stop Timer1 from firing pulses while plan is made
-  Timer1.stop();
+  //  Timer1.stop();
 
   //get the distance to go
   current_pos = getCurrentPos(encoder_1_pos); // uses doe as joint reference for now. Eventually will be aoe.
@@ -915,8 +943,13 @@ void planMovement(float the_commanded_position_) {
   nh.spinOnce();
 
   //set Timer1 to period specified in first plateau
+  //  Timer1.initialize(500000L);  // initialize timer1, and set a 1/2 second period
+  //  Timer1.attachInterrupt(stepOnce);
   Timer1.setPeriod(accel_LUT[1][0]);
-  //  Timer1.setPeriod(5000);//this works
+  //    Timer1.setPeriod(1000000L);
+
+  //  Timer1.restart();
+  //  Timer1.start();
   nh.loginfo("setPeriod");
   nh.spinOnce();
 
@@ -1017,6 +1050,29 @@ void setup() {
   bitWrite(minion_ident, 2, digitalRead(IDENT_PIN_4));
   bitWrite(minion_ident, 3, digitalRead(IDENT_PIN_8));
 
+  //init encoder pins
+  pinMode(ENCODER_1_PIN_A, INPUT_PULLUP);
+  pinMode(ENCODER_1_PIN_B, INPUT_PULLUP);
+  pinMode(ENCODER_2_PIN_A, INPUT_PULLUP);
+  pinMode(ENCODER_2_PIN_B, INPUT_PULLUP);
+
+  //init endstop pins
+  pinMode(CW_ENDSTOP_PIN, INPUT_PULLUP);
+  pinMode(CCW_ENDSTOP_PIN, INPUT_PULLUP);
+
+  //init digital encoder interrupts
+  attachInterrupt(digitalPinToInterrupt(ENCODER_1_PIN_A), doEncoder1A, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_1_PIN_B), doEncoder1B, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_2_PIN_A), doEncoder2A, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_2_PIN_B), doEncoder2B, CHANGE);
+
+  //init stepper driver pins
+  pinMode(STEP_PIN, OUTPUT);
+  pinMode(DIR_PIN, OUTPUT);
+  pinMode(ENABLE_PIN, OUTPUT);
+
+  //enable stepper by default
+  digitalWrite(ENABLE_PIN, LOW);
 
 
   //setup publishers and subscribers
@@ -1026,9 +1082,6 @@ void setup() {
   //    nh.getHardware()->setBaud(9600);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
   nh.initNode();
   nh.subscribe(commanded_joint_positions_sub);
-
-  //setup timer
-  //  Timer7.attachInterrupt(stepOnce).setPeriod(0).start(); //delay(50);      //fires steppers at freqs specified in queue
 
   //use swtich to only setup pubs and subs needed for this minion's joint
   switch (minion_ident) {
@@ -1077,6 +1130,8 @@ void setup() {
       break;
   }//end switch case
 
+  //setup timer
+  //  Timer7.attachInterrupt(stepOnce).setPeriod(0).start(); //delay(50);      //fires steppers at freqs specified in queue
   //  Timer7.attachInterrupt(stepOnce).setPeriod(0).start(); //delay(50);      //fires steppers at freqs specified in queue
   //ref: https://playground.arduino.cc/Code/Timer1
   Timer1.initialize(500000);  // initialize timer1, and set a 1/2 second period
@@ -1128,7 +1183,7 @@ void loop() {
     //    nh.loginfo("finished if new_plan 2");
     running_state = MOVING;
     //    nh.loginfo("finished if new_plan 3");
-    Timer1.start();
+    //    Timer1.start();
     //    nh.loginfo("finished if new_plan 4");
   }
 
