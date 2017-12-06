@@ -62,9 +62,14 @@
         would making changin accel params MUCH easier!
    done - @change timer in setup() from Due timer to Mega
    done - @implent setting Timer1 for next pulse
+   
+   @implement endstop functionality (in stepOnce()?)
+   @implement faster alternative to digitalRead/digitalWrite ref: http://masteringarduino.blogspot.com/2013/10/fastest-and-smallest-digitalread-and.html
+      esp. for end stop
+      also esp. for encoder ISRs
    @add readSensors() method detail
    @implement something to set positions to zero
-   @implement stuff to actually move steppers
+   done - implement stuff to actually move steppers
    @experiment with JointTrajectoryPoint
       .cpp to read a line tped in terminal, then publish
       this program subscribes, then acts on JTP
@@ -163,7 +168,7 @@ volatile unsigned int head = 0; //index to front of my_queue
 volatile unsigned int tail = 0; //index to rear of my_queue
 
 //linear acceleration Lookup Table (LUT)
-const int NUM_PLATEAUS = 10;//50;//  number of steps (plateaus) in acceleration LUT
+const int NUM_PLATEAUS = 50;//  number of steps (plateaus) in acceleration LUT
 const float PLATEAU_DURATION = MAX_VEL / MAX_ACCEL / NUM_PLATEAUS;
 volatile long accel_LUT[NUM_PLATEAUS][3];
 
@@ -982,6 +987,8 @@ void readSensors() {
   if (torque_state == GREEN) strcat(states_msg, green_torque_msg);
   if (torque_state == YELLOW) strcat(states_msg, yellow_torque_msg);
   if (torque_state == RED) strcat(states_msg, red_torque_msg);
+
+  
 }//end readSensors()
 
 void publishAll() {
@@ -1183,8 +1190,6 @@ void loop() {
     //    nh.loginfo("finished if new_plan 2");
     running_state = MOVING;
     //    nh.loginfo("finished if new_plan 3");
-    //    Timer1.start();
-    //    nh.loginfo("finished if new_plan 4");
   }
 
   //log updates
