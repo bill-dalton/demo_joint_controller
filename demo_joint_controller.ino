@@ -62,16 +62,18 @@
         would making changin accel params MUCH easier!
    done - @change timer in setup() from Due timer to Mega
    done - @implent setting Timer1 for next pulse
-   
+
    @implement endstop functionality (in stepOnce()?)
+    WORKING HERE 12/6/17 - CODE PARTIALLY DONE BUT PLA TENSION ADJUSTERS KEPT BREAKING
    @implement faster alternative to digitalRead/digitalWrite ref: http://masteringarduino.blogspot.com/2013/10/fastest-and-smallest-digitalread-and.html
+      attempted 12/6/17 but it did not work
       esp. for end stop
       also esp. for encoder ISRs
    @add readSensors() method detail
    @implement something to set positions to zero
    done - implement stuff to actually move steppers
    @experiment with JointTrajectoryPoint
-      .cpp to read a line tped in terminal, then publish
+      .cpp to read a line typed in terminal, then publish
       this program subscribes, then acts on JTP
    @implement minion_ident renumbering to match joint_ident
 */
@@ -82,6 +84,25 @@
 #include <std_msgs/String.h>
 #include <std_msgs/Float32.h>
 #include <trajectory_msgs/JointTrajectoryPoint.h>
+
+//Defines to replace digitalWrite and digitalRead from: http://masteringarduino.blogspot.com/2013/10/fastest-and-smallest-digitalread-and.html
+#define portOfPin(P)\
+  (((P)>=0&&(P)<8)?&PORTD:(((P)>7&&(P)<14)?&PORTB:&PORTC))
+#define ddrOfPin(P)\
+  (((P)>=0&&(P)<8)?&DDRD:(((P)>7&&(P)<14)?&DDRB:&DDRC))
+#define pinOfPin(P)\
+  (((P)>=0&&(P)<8)?&PIND:(((P)>7&&(P)<14)?&PINB:&PINC))
+#define pinIndex(P)((uint8_t)(P>13?P-14:P&7))
+#define pinMask(P)((uint8_t)(1<<pinIndex(P)))
+
+#define pinAsInput(P) *(ddrOfPin(P))&=~pinMask(P)
+#define pinAsInputPullUp(P) *(ddrOfPin(P))&=~pinMask(P);digitalHigh(P)
+#define pinAsOutput(P) *(ddrOfPin(P))|=pinMask(P)
+#define digitalLow(P) *(portOfPin(P))&=~pinMask(P)
+#define digitalHigh(P) *(portOfPin(P))|=pinMask(P)
+#define isHigh(P)((*(pinOfPin(P))& pinMask(P))>0)
+#define isLow(P)((*(pinOfPin(P))& pinMask(P))==0)
+#define digitalState(P)((uint8_t)isHigh(P))
 
 //states
 enum {UNPOWERED, HOLDING_POSITION, MOVING, FINAL_APPROACH, CW_ENDSTOP_ACTIVATED, CCW_ENDSTOP_ACTIVATED, CALIBRATING } running_state;
@@ -191,8 +212,8 @@ std_msgs::String state2; //may be in multiple states simultaneously
 trajectory_msgs::JointTrajectoryPoint jtp;
 
 //endstop pins
-const int CW_ENDSTOP_PIN = 16;  //TO DO UPDATE TO CORRECT PIN!
-const int CCW_ENDSTOP_PIN = 17;  //TO DO UPDATE TO CORRECT PIN!
+const int CW_ENDSTOP_PIN = 2;  //pin # corrected 12/6/17
+const int CCW_ENDSTOP_PIN = 3; //pin # corrected 12/6/17
 
 //encoder pins
 const int ENCODER_1_PIN_A = 18;
@@ -203,7 +224,9 @@ const int ENCODER_2_PIN_B = 21;
 //stepper pins
 const int STEP_PIN = A0;
 const int DIR_PIN = A1;
-const int ENABLE_PIN = A2;
+const int ENABLE_PIN = A2;//note this enables both stepper 1 and stepper 2 on a joint
+const int STEP2_PIN = A3; //for second stepper motor on same joint e.g. SL
+const int DIR2_PIN = A4;  //Note DIR2 pin for SL must always be set opposite DIR_PIN as steppers motors installed opposite each other
 
 //minion identification pins
 const int IDENT_PIN_1 = 36;  //correct for new minion shield  V0.1 APr2016
@@ -571,8 +594,10 @@ void doEncoder2B() {
 void pulseStepper() {
   //pulses stepper during normal motion.
   digitalWrite(STEP_PIN, HIGH);
+  digitalWrite(STEP2_PIN, HIGH);
   //    delayMicroseconds(5);  //increase this if pulses too fast for accurate step or jitters
   digitalWrite(STEP_PIN, LOW);
+  digitalWrite(STEP2_PIN, LOW);
   //    delayMicroseconds(5);  //increase this if pulses too fast for accurate step or jitters
   if (direction_CW) {
     stepper_counts++;
@@ -580,8 +605,8 @@ void pulseStepper() {
   else {
     stepper_counts--;
   }
-//  nh.loginfo("pulseStepper");
-//  nh.spinOnce();
+  //  nh.loginfo("pulseStepper");
+  //  nh.spinOnce();
 
 } // end pulseStepper()
 
@@ -589,8 +614,30 @@ void stepOnce() {
   /*
      determines, based on state, whether or not to pulse stepper, and how fast to pulse
   */
-//  nh.loginfo("stepOnce()");
-//  nh.spinOnce();
+  //  nh.loginfo("stepOnce()");
+  //  nh.spinOnce();
+
+  //check for endstop activation - note endstop pins are set as INPUT_PULLUP so a LOW means switch has been activated
+  if (digitalRead(CW_ENDSTOP_PIN) == LOW) {
+    if (direction_CW) {
+      nh.loginfo("CW endstop + dir CW, stop!");
+      //WORKING HERE 12/6/17
+      //NEED TO CHECK DIRECTIONS ARE CORRECT
+      //NEED TO UNCOMMENT NEXT LINE
+      //return; //exits stepOnce() if endstop has been activated in this direction
+    }
+    else {
+      nh.loginfo("CW endstop + dir CCW");
+    }
+  }
+  if (digitalRead(CCW_ENDSTOP_PIN) == LOW) {
+    if (!direction_CW) {
+      nh.loginfo("CCW endstop + dir CCW, stop!");
+    }
+    else {
+      nh.loginfo("CCW endstop + dir CW");
+    }
+  }
 
   switch (running_state) {
     case UNPOWERED:
@@ -937,11 +984,13 @@ void planMovement(float the_commanded_position_) {
   if (dtg_ > 0) {
     direction_CW = true;
     digitalWrite(DIR_PIN, LOW);
+    digitalWrite(DIR2_PIN, HIGH);
     nh.loginfo("in planMovement(), dir is CW");
     nh.spinOnce();
   } else {
     direction_CW = false;
     digitalWrite(DIR_PIN, HIGH);
+    digitalWrite(DIR2_PIN, LOW);
     nh.loginfo("in planMovement(), dir is CCW");
     nh.spinOnce();
   }
@@ -988,7 +1037,7 @@ void readSensors() {
   if (torque_state == YELLOW) strcat(states_msg, yellow_torque_msg);
   if (torque_state == RED) strcat(states_msg, red_torque_msg);
 
-  
+
 }//end readSensors()
 
 void publishAll() {
@@ -1075,7 +1124,9 @@ void setup() {
 
   //init stepper driver pins
   pinMode(STEP_PIN, OUTPUT);
+  pinMode(STEP2_PIN, OUTPUT);
   pinMode(DIR_PIN, OUTPUT);
+  pinMode(DIR2_PIN, OUTPUT);
   pinMode(ENABLE_PIN, OUTPUT);
 
   //enable stepper by default
@@ -1136,6 +1187,8 @@ void setup() {
     default:
       break;
   }//end switch case
+
+  nh.spinOnce();
 
   //setup timer
   //  Timer7.attachInterrupt(stepOnce).setPeriod(0).start(); //delay(50);      //fires steppers at freqs specified in queue
@@ -1199,6 +1252,34 @@ void loop() {
     readSensors();
     publishAll();
     next_update = millis() + UPDATE_INTERVAL;
+
+    //debug only - tried 12/6/17 - didnt work
+    //        if( isHigh(CW_ENDSTOP_PIN)){
+    //          nh.loginfo("CW endstop HHIGH");
+    //        }
+    //        if( isLow(CW_ENDSTOP_PIN)){
+    //          nh.loginfo("CW endstop LLOW");
+    //        }
+    //        if( isHigh(CCW_ENDSTOP_PIN)){
+    //          nh.loginfo("CCW endstop HHIGH");
+    //        }
+    //        if( isLow(CCW_ENDSTOP_PIN)){
+    //          nh.loginfo("CCW endstop LLOW");
+    //        }
+
+    //    if (digitalRead(CW_ENDSTOP_PIN) == HIGH) {
+    //      nh.loginfo("CW endstop HIGH");
+    //    }
+    //    if (digitalRead(CW_ENDSTOP_PIN) == LOW) {
+    //      nh.loginfo("CW endstop LOW");
+    //    }
+    //    if (digitalRead(CCW_ENDSTOP_PIN) == HIGH) {
+    //      nh.loginfo("CCW endstop HIGH");
+    //    }
+    //    if (digitalRead(CCW_ENDSTOP_PIN) == LOW) {
+    //      nh.loginfo("CCW endstop LOW");
+    //    }
+
   }
 
   nh.spinOnce();
