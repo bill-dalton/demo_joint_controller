@@ -75,6 +75,7 @@
    @experiment with JointTrajectoryPoint
       .cpp to read a line typed in terminal, then publish
       this program subscribes, then acts on JTP
+   @after true joint encoders actually installed, change joint_encoder_pos.data to use that
    @implement minion_ident renumbering to match joint_ident
 */
 
@@ -145,12 +146,20 @@ const float GEAR_RATIO = 65.0;
 
 //encoder constants
 const int ENCODER_1_PPR = 2400;
-const float ENCODER_1_GEAR_RATIO = 5.0;               //ratio final joint motion to doe encoder motion
-const float ENCODER_1_DEGREES_PER_COUNT = 0.03;       //=360 / ENCODER_1_PPR / ENCODER_1_GEAR_RATIO;//360/2400/5.0=0.03degrees
+const float ENCODER_1_GEAR_RATIO = 18.055;            //ratio final joint motion to doe encoder motion = 65/3.6
+const float ENCODER_1_DEGREES_PER_COUNT = 0.0083;       //=360 / ENCODER_1_PPR / ENCODER_1_GEAR_RATIO;//360/2400/5.0=0.03degrees
 const int ENCODER_2_PPR = 2400;                       //in encoder counts, used for stepper_doe
 const float ENCODER_2_GEAR_RATIO = 15.0;              //ratio final joint motion to stepper doe encoder motion
 const float ENCODER_2_DEGREES_PER_COUNT = 0.01;       //=360 / ENCODER_2_PPR / ENCODER_2_GEAR_RATIO;//360/2400/15.0=0.01degrees
 const float ENCODER_1_COUNTS_PER_STEPPER_COUNT = 36.0;//= GEAR_REDUCTION_RATIO_STEPPER_TO_SERIES_ELASTIC * ENCODER_1_PPR / (STEPPER_STEPS_PER_REV * MICROSTEPS);
+/*
+ * special case encoder constants for AndyMark encoder mounted on S-E assembly.
+ * gear ratio for AndyMark encoder to SL joint = 19.741 = (59T/23T)*(59T/23T)*(6"/2")
+ * Normally and eventuall, an encoder (analog or digital) will be mounted directly on joint itself.
+ */  
+const int JOINT_ENCODER_PPR = 1440;                   //for AndyMark encoder
+const float JOINT_ENCODER_GEAR_RATIO = 19.741;         //normally =zero, special prototype case of AndyMark encoder
+const float JOINT_DEGREES_PER_ENCODER_COUNT = 0.01284; //0.01284=360/1440/19.741 
 
 //motion constants
 const float MAX_VEL = 25.0;   //degrees/sec
@@ -624,18 +633,25 @@ void stepOnce() {
       //WORKING HERE 12/6/17
       //NEED TO CHECK DIRECTIONS ARE CORRECT
       //NEED TO UNCOMMENT NEXT LINE
-      //return; //exits stepOnce() if endstop has been activated in this direction
+      running_state = CW_ENDSTOP_ACTIVATED;
+      return; //exits stepOnce() if endstop has been activated in this direction
     }
     else {
       nh.loginfo("CW endstop + dir CCW");
+      running_state = CW_ENDSTOP_ACTIVATED;
+      return; //exits stepOnce() if endstop has been activated in this direction
     }
   }
   if (digitalRead(CCW_ENDSTOP_PIN) == LOW) {
     if (!direction_CW) {
       nh.loginfo("CCW endstop + dir CCW, stop!");
+      running_state = CCW_ENDSTOP_ACTIVATED;
+      return; //exits stepOnce() if endstop has been activated in this direction
     }
     else {
       nh.loginfo("CCW endstop + dir CW");
+      running_state = CCW_ENDSTOP_ACTIVATED;
+      return; //exits stepOnce() if endstop has been activated in this direction
     }
   }
 
@@ -736,7 +752,8 @@ float getCurrentPos ( long encoder_position ) {
   */
   //To Do - reinstate after calibration routine finsihed
   //  float float_pos_ = ENCODER_1_DEGREES_PER_COUNT * (encoder_1_pos - (max_doe_counts / 2));
-  float float_pos_ = (float) (ENCODER_1_DEGREES_PER_COUNT * encoder_1_pos);
+  //float float_pos_ = (float) (ENCODER_1_DEGREES_PER_COUNT * encoder_1_pos);
+  float float_pos_ = -1.0 * ((float) encoder_1_pos) * JOINT_DEGREES_PER_ENCODER_COUNT;
   return float_pos_;
 }
 
@@ -767,6 +784,10 @@ void planMovement(float the_commanded_position_) {
 
   //debug loginfo dtg_
   char result[8]; // Buffer big enough for 7-character float
+  dtostrf(current_pos, 6, 2, result); // Leave room for too large numbers!
+  nh.loginfo("current_pos=");//this works
+  nh.loginfo(result);//this works
+  nh.spinOnce();
   dtostrf(dtg_, 6, 2, result); // Leave room for too large numbers!
   nh.loginfo("dtg_=");//this works
   nh.loginfo(result);//this works
@@ -1020,9 +1041,6 @@ void planMovement(float the_commanded_position_) {
   nh.spinOnce();
 }//end planMovement()
 
-
-
-
 void readSensors() {
   //report state
   strcpy(states_msg, empty_states_msg);      //overwrites previous states_msg with empty msg
@@ -1037,6 +1055,13 @@ void readSensors() {
   if (torque_state == YELLOW) strcat(states_msg, yellow_torque_msg);
   if (torque_state == RED) strcat(states_msg, red_torque_msg);
 
+  //place readings in ros messages to be published
+  //WORKING HERE 12/13/17
+  //gear ratio SL joint to AndyMark encoder on S-E joint = 19.741 = (6/2)*(59T/23T)*(59T/23T)
+  joint_encoder_pos.data = -1.0 * ((float) encoder_1_pos) * JOINT_DEGREES_PER_ENCODER_COUNT;//TO DO change this to true joint encoder after joint encoder actually installed
+  stepper_count_pos.data = ((float) stepper_counts) * DEGREES_PER_MICROSTEP;
+  stepper_encoder_pos.data = 9.99;//stepper_doe_pos TO DO placeholder value for now
+  torque.data = joint_encoder_pos.data - stepper_count_pos.data;//TO DO convert to joint_encoder_pos.data -stepper_encoder_pos.data 
 
 }//end readSensors()
 
@@ -1053,6 +1078,17 @@ void publishAll() {
 
   //populate data
   state.data = states_msg;
+
+  //debug only
+  sprintf(miscMsgs, "encoder_1_pos=%d", encoder_1_pos);
+  nh.loginfo(miscMsgs);
+  nh.spinOnce();  
+  sprintf(miscMsgs, "encoder_2_pos=%d", encoder_2_pos);
+  nh.loginfo(miscMsgs);
+  nh.spinOnce();
+  sprintf(miscMsgs, "current_pos=%d", current_pos);
+  nh.loginfo(miscMsgs);
+  nh.spinOnce();
 
   switch (minion_ident) {
     case SL_IDENT:
