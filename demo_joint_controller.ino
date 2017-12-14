@@ -62,9 +62,17 @@
         would making changin accel params MUCH easier!
    done - @change timer in setup() from Due timer to Mega
    done - @implent setting Timer1 for next pulse
-
-   @implement endstop functionality (in stepOnce()?)
-    WORKING HERE 12/6/17 - CODE PARTIALLY DONE BUT PLA TENSION ADJUSTERS KEPT BREAKING
+   done - implement endstop functionality in stepOnce()
+   @fix problem of runaway for commanded motion > 10 degrees
+      somehow steps_remaining become negative on second command
+        problems is in planMovement() current_pos is some large negative number
+           suspect encoder_1_pos is getting corriupted from ISR even though it is declared volatile
+      &&Idea: this might work better if encoder counting was in a class with getter and setter
+   @get rid of 1 pulse per second when stationary
+      never getting to running_state = HOLDING_POSITION;
+   @replace joint_encoder_pos with stepper_count_pos as controlling variable?
+      to get around problems with reading encoder_1_pos
+   @implement makeHoldPositionAdjustment() from BR_demo_joint_controller
    @implement faster alternative to digitalRead/digitalWrite ref: http://masteringarduino.blogspot.com/2013/10/fastest-and-smallest-digitalread-and.html
       attempted 12/6/17 but it did not work
       esp. for end stop
@@ -75,6 +83,8 @@
    @experiment with JointTrajectoryPoint
       .cpp to read a line typed in terminal, then publish
       this program subscribes, then acts on JTP
+   @get correct ratios for UR_JOINT_ENCODER_GEAR_RATIO etc
+      done for SL only
    @after true joint encoders actually installed, change joint_encoder_pos.data to use that
    @implement minion_ident renumbering to match joint_ident
 */
@@ -143,7 +153,6 @@ const float STEPPER_DEGREES_PER_STEP = (float) (1 / STEPPER_STEPS_PER_REV);//s.b
 const int MICROSTEPS = 4;               //set on stepper driver
 const float GEAR_RATIO = 65.0;
 
-
 //encoder constants
 const int ENCODER_1_PPR = 2400;
 const float ENCODER_1_GEAR_RATIO = 18.055;            //ratio final joint motion to doe encoder motion = 65/3.6
@@ -153,13 +162,31 @@ const float ENCODER_2_GEAR_RATIO = 15.0;              //ratio final joint motion
 const float ENCODER_2_DEGREES_PER_COUNT = 0.01;       //=360 / ENCODER_2_PPR / ENCODER_2_GEAR_RATIO;//360/2400/15.0=0.01degrees
 const float ENCODER_1_COUNTS_PER_STEPPER_COUNT = 36.0;//= GEAR_REDUCTION_RATIO_STEPPER_TO_SERIES_ELASTIC * ENCODER_1_PPR / (STEPPER_STEPS_PER_REV * MICROSTEPS);
 /*
- * special case encoder constants for AndyMark encoder mounted on S-E assembly.
- * gear ratio for AndyMark encoder to SL joint = 19.741 = (59T/23T)*(59T/23T)*(6"/2")
- * Normally and eventuall, an encoder (analog or digital) will be mounted directly on joint itself.
- */  
-const int JOINT_ENCODER_PPR = 1440;                   //for AndyMark encoder
-const float JOINT_ENCODER_GEAR_RATIO = 19.741;         //normally =zero, special prototype case of AndyMark encoder
-const float JOINT_DEGREES_PER_ENCODER_COUNT = 0.01284; //0.01284=360/1440/19.741 
+   special case encoder constants for AndyMark encoder mounted on S-E assembly.
+   gear ratio for AndyMark encoder to SL joint = 19.741 = (59T/23T)*(59T/23T)*(6"/2")
+   Normally and eventuall, an encoder (analog or digital) will be mounted directly on joint itself.
+   The following are ratios between the joint itself and the shaft on which the joint encoder is located
+   SL_JOINT_ENCODER_GEAR_RATIO = 19.741 = (59T/23T)*(59T/23T)*(6"/2")
+   UR_JOINT_ENCODER_GEAR_RATIO =  = ( / )*( /)*(5"/2")
+   EL_JOINT_ENCODER_GEAR_RATIO =  = ( / )*( /)*(2"/2")*( /)
+   LR_JOINT_ENCODER_GEAR_RATIO =  = ( / )*( /)*(1.5"/2")*( /)
+   SL_JOINT_ENCODER_PPR = 1440;                   //for AndyMark encoder
+   UR_JOINT_ENCODER_PPR = 1440;                   //for AndyMark encoder
+   EL_JOINT_ENCODER_PPR = 1440;                   //for AndyMark encoder
+   LR_JOINT_ENCODER_PPR = 1440;                   //for AndyMark encoder
+*/
+const float SL_JOINT_DEGREES_PER_ENCODER_COUNT = 0.01284; //0.01284=360/1440/19.741=360/SL_JOINT_ENCODER_PPR/SL_JOINT_ENCODER_GEAR_RATIO
+const float UR_JOINT_DEGREES_PER_ENCODER_COUNT = 0.01284; //0.01284=360/1440/19.741
+const float EL_JOINT_DEGREES_PER_ENCODER_COUNT = 0.01284; //0.01284=360/1440/19.741
+const float LR_JOINT_DEGREES_PER_ENCODER_COUNT = 0.01284; //0.01284=360/1440/19.741
+
+//encoder variables
+/*
+   eventually =zero when encoder directly on joint.
+   For now, this varies for each joint depending on gear ratio between joint and
+   encoder on S-E assembly. This is set in setup() for each joint
+*/
+volatile float joint_degrees_per_encoder_count = 1.0;
 
 //motion constants
 const float MAX_VEL = 25.0;   //degrees/sec
@@ -680,6 +707,9 @@ void stepOnce() {
           current_plateau_index++;
           Timer1.setPeriod(accel_LUT[current_plateau_index][0]);
           //debug
+            sprintf(miscMsgs, "steps_remaining=%d", steps_remaining);
+            nh.loginfo(miscMsgs);
+            nh.spinOnce();
           nh.loginfo("cpi++");
           nh.spinOnce();
           //have we entered cruise phase?
@@ -699,6 +729,9 @@ void stepOnce() {
             current_plateau_index--;
             Timer1.setPeriod(accel_LUT[current_plateau_index][0]);
             //debug
+            sprintf(miscMsgs, "steps_remaining=%d", steps_remaining);
+            nh.loginfo(miscMsgs);
+            nh.spinOnce();
             nh.loginfo("cpi--");
             nh.spinOnce();
             current_plateau_steps_remaining = accel_LUT[current_plateau_index][1];
@@ -707,6 +740,9 @@ void stepOnce() {
             //no, movement is complete. setup HOLDING_POSITION state and return
             running_state = HOLDING_POSITION;
             Timer1.setPeriod(POSITION_ADJUSTMENT_SPEED);
+            //WORKING HERE 12/14/17 8:33AM - not getting here!
+            Timer1.stop();
+            nh.loginfo("stopping timer");
             return;
           }
         }
@@ -743,7 +779,7 @@ void stepOnce() {
   }//end switch running_state
 }// end stepOnce()
 
-float getCurrentPos ( long encoder_position ) {
+float getCurrentPos ( long encoder_position_ ) {
   /*
     Converts doe encoder_1_pos in doe encoder counts into degrees of joint position and centers appropriately from calibration()
     Note encoder position zero is defined as CCW endstop, while joint position zero is defined as center of travel
@@ -753,7 +789,18 @@ float getCurrentPos ( long encoder_position ) {
   //To Do - reinstate after calibration routine finsihed
   //  float float_pos_ = ENCODER_1_DEGREES_PER_COUNT * (encoder_1_pos - (max_doe_counts / 2));
   //float float_pos_ = (float) (ENCODER_1_DEGREES_PER_COUNT * encoder_1_pos);
-  float float_pos_ = -1.0 * ((float) encoder_1_pos) * JOINT_DEGREES_PER_ENCODER_COUNT;
+
+  //debug loginfo
+  char result4[16]; // Buffer big enough for 7-character float
+  dtostrf(joint_degrees_per_encoder_count, 12, 4, result4); // Leave room for too large numbers!
+  nh.loginfo("joint_degrees_per_encoder_count=");//this works
+  nh.loginfo(result4);//this works
+  nh.spinOnce();
+
+  sprintf(miscMsgs, "getCurrentPos() encoder_position_=%d", encoder_position_);
+  nh.loginfo(miscMsgs);
+//  float float_pos_ = -1.0 * ((float) encoder_1_pos) * joint_degrees_per_encoder_count;
+  float float_pos_ = -1.0 * ((float) encoder_position_) * joint_degrees_per_encoder_count;
   return float_pos_;
 }
 
@@ -783,12 +830,12 @@ void planMovement(float the_commanded_position_) {
   dtg_ = the_commanded_position_ - current_pos;  //joint distance to travel in signed degrees. Sign indicates direction of movement
 
   //debug loginfo dtg_
-  char result[8]; // Buffer big enough for 7-character float
-  dtostrf(current_pos, 6, 2, result); // Leave room for too large numbers!
+  char result[16]; // Buffer big enough for 15-character float
+  dtostrf(current_pos, 14, 2, result); // Leave room for too large numbers!
   nh.loginfo("current_pos=");//this works
   nh.loginfo(result);//this works
   nh.spinOnce();
-  dtostrf(dtg_, 6, 2, result); // Leave room for too large numbers!
+  dtostrf(dtg_, 14, 2, result); // Leave room for too large numbers!
   nh.loginfo("dtg_=");//this works
   nh.loginfo(result);//this works
 
@@ -1058,10 +1105,10 @@ void readSensors() {
   //place readings in ros messages to be published
   //WORKING HERE 12/13/17
   //gear ratio SL joint to AndyMark encoder on S-E joint = 19.741 = (6/2)*(59T/23T)*(59T/23T)
-  joint_encoder_pos.data = -1.0 * ((float) encoder_1_pos) * JOINT_DEGREES_PER_ENCODER_COUNT;//TO DO change this to true joint encoder after joint encoder actually installed
+  joint_encoder_pos.data = -1.0 * ((float) encoder_1_pos) * joint_degrees_per_encoder_count;//TO DO change this to true joint encoder after joint encoder actually installed
   stepper_count_pos.data = ((float) stepper_counts) * DEGREES_PER_MICROSTEP;
   stepper_encoder_pos.data = 9.99;//stepper_doe_pos TO DO placeholder value for now
-  torque.data = joint_encoder_pos.data - stepper_count_pos.data;//TO DO convert to joint_encoder_pos.data -stepper_encoder_pos.data 
+  torque.data = joint_encoder_pos.data - stepper_count_pos.data;//TO DO convert to joint_encoder_pos.data -stepper_encoder_pos.data
 
 }//end readSensors()
 
@@ -1080,15 +1127,15 @@ void publishAll() {
   state.data = states_msg;
 
   //debug only
-  sprintf(miscMsgs, "encoder_1_pos=%d", encoder_1_pos);
-  nh.loginfo(miscMsgs);
-  nh.spinOnce();  
-  sprintf(miscMsgs, "encoder_2_pos=%d", encoder_2_pos);
-  nh.loginfo(miscMsgs);
-  nh.spinOnce();
-  sprintf(miscMsgs, "current_pos=%d", current_pos);
-  nh.loginfo(miscMsgs);
-  nh.spinOnce();
+  //  sprintf(miscMsgs, "encoder_1_pos=%d", encoder_1_pos);
+  //  nh.loginfo(miscMsgs);
+  //  nh.spinOnce();
+  //  sprintf(miscMsgs, "encoder_2_pos=%d", encoder_2_pos);
+  //  nh.loginfo(miscMsgs);
+  //  nh.spinOnce();
+  //  sprintf(miscMsgs, "current_pos=%d", current_pos);
+  //  nh.loginfo(miscMsgs);
+  //  nh.spinOnce();
 
   switch (minion_ident) {
     case SL_IDENT:
@@ -1177,10 +1224,11 @@ void setup() {
   nh.initNode();
   nh.subscribe(commanded_joint_positions_sub);
 
-  //use swtich to only setup pubs and subs needed for this minion's joint
+  //use swtich to only setup encoders, pubs and subs needed for this minion's joint
   switch (minion_ident) {
     case SL_IDENT:
       // SL joint
+      joint_degrees_per_encoder_count = SL_JOINT_DEGREES_PER_ENCODER_COUNT;
       nh.advertise(SL_joint_encoder_pos_pub);
       nh.advertise(SL_stepper_count_pos_pub);
       nh.advertise(SL_stepper_encoder_pos_pub);
@@ -1192,6 +1240,7 @@ void setup() {
       break;
     case UR_IDENT:
       // UR joint
+      joint_degrees_per_encoder_count = UR_JOINT_DEGREES_PER_ENCODER_COUNT;
       nh.advertise(UR_joint_encoder_pos_pub);
       nh.advertise(UR_stepper_count_pos_pub);
       nh.advertise(UR_stepper_encoder_pos_pub);
@@ -1202,6 +1251,7 @@ void setup() {
       break;
     case EL_IDENT:
       // EL joint
+      joint_degrees_per_encoder_count = EL_JOINT_DEGREES_PER_ENCODER_COUNT;
       nh.advertise(EL_joint_encoder_pos_pub);
       nh.advertise(EL_stepper_count_pos_pub);
       nh.advertise(EL_stepper_encoder_pos_pub);
@@ -1212,6 +1262,7 @@ void setup() {
       break;
     case LR_IDENT:
       // LR joint
+      joint_degrees_per_encoder_count = LR_JOINT_DEGREES_PER_ENCODER_COUNT;
       nh.advertise(LR_joint_encoder_pos_pub);
       nh.advertise(LR_stepper_count_pos_pub);
       nh.advertise(LR_stepper_encoder_pos_pub);
@@ -1230,7 +1281,7 @@ void setup() {
   //  Timer7.attachInterrupt(stepOnce).setPeriod(0).start(); //delay(50);      //fires steppers at freqs specified in queue
   //  Timer7.attachInterrupt(stepOnce).setPeriod(0).start(); //delay(50);      //fires steppers at freqs specified in queue
   //ref: https://playground.arduino.cc/Code/Timer1
-  Timer1.initialize(500000);  // initialize timer1, and set a 1/2 second period
+  Timer1.initialize(5000000);  // initialize timer1, and set a 1/2 second period
   Timer1.attachInterrupt(stepOnce);
 
   //polpulate acceleration LookUp Table accel_LUT
@@ -1284,37 +1335,31 @@ void loop() {
   //log updates
   if (millis() > next_update) {
     // to do ?Add a if (!nh.connected()){spinOnce()} else {updateStatus()};
-    nh.loginfo("updating");
+    //    nh.loginfo("updating");
+
+//    sprintf(miscMsgs, "steps_remaining=%d", steps_remaining);
+//    nh.loginfo(miscMsgs);
+//    nh.spinOnce();
+
+//  //debug
+//  sprintf(miscMsgs, "encoder_1_pos=%d", encoder_1_pos);
+//  nh.loginfo(miscMsgs);
+//  nh.spinOnce();
+    
+//  //debug get the distance to go
+//  current_pos = getCurrentPos(encoder_1_pos); // uses doe as joint reference for now. Eventually will be aoe.
+//
+//  //debug loginfo 
+//  char result[16]; // Buffer big enough for 15-character float
+//  dtostrf(current_pos, 14, 2, result); // Leave room for too large numbers!
+//  nh.loginfo("current_pos=");//this works
+//  nh.loginfo(result);//this works
+//  nh.spinOnce();
+
     readSensors();
     publishAll();
     next_update = millis() + UPDATE_INTERVAL;
 
-    //debug only - tried 12/6/17 - didnt work
-    //        if( isHigh(CW_ENDSTOP_PIN)){
-    //          nh.loginfo("CW endstop HHIGH");
-    //        }
-    //        if( isLow(CW_ENDSTOP_PIN)){
-    //          nh.loginfo("CW endstop LLOW");
-    //        }
-    //        if( isHigh(CCW_ENDSTOP_PIN)){
-    //          nh.loginfo("CCW endstop HHIGH");
-    //        }
-    //        if( isLow(CCW_ENDSTOP_PIN)){
-    //          nh.loginfo("CCW endstop LLOW");
-    //        }
-
-    //    if (digitalRead(CW_ENDSTOP_PIN) == HIGH) {
-    //      nh.loginfo("CW endstop HIGH");
-    //    }
-    //    if (digitalRead(CW_ENDSTOP_PIN) == LOW) {
-    //      nh.loginfo("CW endstop LOW");
-    //    }
-    //    if (digitalRead(CCW_ENDSTOP_PIN) == HIGH) {
-    //      nh.loginfo("CCW endstop HIGH");
-    //    }
-    //    if (digitalRead(CCW_ENDSTOP_PIN) == LOW) {
-    //      nh.loginfo("CCW endstop LOW");
-    //    }
 
   }
 
