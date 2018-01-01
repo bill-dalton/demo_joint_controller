@@ -140,6 +140,33 @@ volatile bool new_plan = false;
 char miscMsgs[20];
 char miscMsgs2[20];
 char miscMsgs3[20];
+char miscMsgs4[20];
+char miscMsgs5[20];
+char miscMsgs6[20];
+char miscMsgs7[20];
+char miscMsgs8[20];
+char miscMsgs9[20];
+char miscMsgs10[20];
+char miscMsgs11[20];
+char miscMsgs12[20];
+char miscMsgs13[20];
+char miscMsgs14[20];
+char miscMsgs15[20];
+char miscMsgs16[20];
+char miscMsgs17[20];
+char miscMsgs18[20];
+char miscMsgs19[20];
+char miscMsgs20[20];
+char miscMsgs21[20];
+char miscMsgs22[20];
+char miscMsgs23[20];
+char miscMsgs24[20];
+char miscMsgs25[20];
+char miscMsgs26[20];
+char miscMsgs27[20];
+char miscMsgs28[20];
+char miscMsgs29[20];
+char miscMsgs30[20];
 char inbound_message[40];
 
 //internal position and direction variables
@@ -288,8 +315,10 @@ const int EE2_IDENT = 6;
 ros::NodeHandle_<ArduinoHardware, 2, 8, 512, 1024> nh;
 
 ////loop timing variables
-volatile unsigned long next_update = 0;//used to time loop updates
-const unsigned long UPDATE_INTERVAL = 500;//in milliseconds
+volatile unsigned long next_update = 0L;//used to time loop updates
+const unsigned long UPDATE_INTERVAL = 500L;//in milliseconds
+volatile unsigned long loop_counter = 0L;
+volatile int int_loop_counter = 0;
 
 //debug stuff
 float test_var = 56.66;
@@ -707,9 +736,9 @@ void stepOnce() {
           current_plateau_index++;
           Timer1.setPeriod(accel_LUT[current_plateau_index][0]);
           //debug
-            sprintf(miscMsgs, "steps_remaining=%d", steps_remaining);
-            nh.loginfo(miscMsgs);
-            nh.spinOnce();
+          sprintf(miscMsgs, "steps_remaining=%ld", steps_remaining);
+          nh.loginfo(miscMsgs);
+          nh.spinOnce();
           nh.loginfo("cpi++");
           nh.spinOnce();
           //have we entered cruise phase?
@@ -729,8 +758,8 @@ void stepOnce() {
             current_plateau_index--;
             Timer1.setPeriod(accel_LUT[current_plateau_index][0]);
             //debug
-            sprintf(miscMsgs, "steps_remaining=%d", steps_remaining);
-            nh.loginfo(miscMsgs);
+            sprintf(miscMsgs2, "steps_remaining=%ld", steps_remaining);
+            nh.loginfo(miscMsgs2);
             nh.spinOnce();
             nh.loginfo("cpi--");
             nh.spinOnce();
@@ -786,21 +815,41 @@ float getCurrentPos ( long encoder_position_ ) {
     Note that degrees of joint position can therefore be positive or negative
     Conversion factor is half of fullscale doe travel
   */
-  //To Do - reinstate after calibration routine finsihed
+  //To Do - reinstate after calibration routine finished
   //  float float_pos_ = ENCODER_1_DEGREES_PER_COUNT * (encoder_1_pos - (max_doe_counts / 2));
   //float float_pos_ = (float) (ENCODER_1_DEGREES_PER_COUNT * encoder_1_pos);
 
-  //debug loginfo
-  char result4[16]; // Buffer big enough for 7-character float
-  dtostrf(joint_degrees_per_encoder_count, 12, 4, result4); // Leave room for too large numbers!
-  nh.loginfo("joint_degrees_per_encoder_count=");//this works
-  nh.loginfo(result4);//this works
+  noInterrupts();
+
+  nh.loginfo("entering getCurrentPos()");
   nh.spinOnce();
 
-  sprintf(miscMsgs, "getCurrentPos() encoder_position_=%d", encoder_position_);
-  nh.loginfo(miscMsgs);
-//  float float_pos_ = -1.0 * ((float) encoder_1_pos) * joint_degrees_per_encoder_count;
+  sprintf(miscMsgs3, "long encoder_1_pos=%ld", encoder_1_pos);
+  nh.loginfo(miscMsgs3);
+  nh.spinOnce();
+
+  sprintf(miscMsgs4, "long encoder_position_=%ld", encoder_position_);
+  nh.loginfo(miscMsgs4);
+  nh.spinOnce();
+
+  //WORKING HERE 1/1/2018 11:49am miscMsgs in this next section changes value of volatile long encoder_1_pos
+  sprintf(miscMsgs5, "getCurrentPos() encoder_position_=%ld", encoder_position_);
+  nh.loginfo(miscMsgs5);
+  //  float float_pos_ = -1.0 * ((float) encoder_1_pos) * joint_degrees_per_encoder_count;
   float float_pos_ = -1.0 * ((float) encoder_position_) * joint_degrees_per_encoder_count;
+
+  //debug to do remove
+  //  float float_pos_ = 1.01;
+
+  sprintf(miscMsgs6, "long encoder_1_pos=%ld", encoder_1_pos);
+  nh.loginfo(miscMsgs6);
+  nh.spinOnce();
+
+  interrupts();
+
+  nh.loginfo("exiting getCurrentPos()");
+  nh.spinOnce();
+
   return float_pos_;
 }
 
@@ -819,11 +868,15 @@ void planMovement(float the_commanded_position_) {
   long cruise_steps_at_reduced_vel_ = 0;
   long cruise_steps_ = 0;
 
-  nh.loginfo("planMovement");
+  nh.loginfo("entering planMovement()");
   nh.spinOnce();
 
   //stop Timer1 from firing pulses while plan is made
   //  Timer1.stop();
+
+  sprintf(miscMsgs7, "long encoder_1_pos=%ld", encoder_1_pos);
+  nh.loginfo(miscMsgs7);
+  nh.spinOnce();
 
   //get the distance to go
   current_pos = getCurrentPos(encoder_1_pos); // uses doe as joint reference for now. Eventually will be aoe.
@@ -843,8 +896,8 @@ void planMovement(float the_commanded_position_) {
   dtg_stepper_counts_ = (long) abs(dtg_ / DEGREES_PER_MICROSTEP);
 
   //debug only
-  sprintf(miscMsgs, "dtg_stepper_counts_=%d", dtg_stepper_counts_);
-  nh.loginfo(miscMsgs);
+  sprintf(miscMsgs8, "dtg_stepper_counts_=%ld", dtg_stepper_counts_);
+  nh.loginfo(miscMsgs8);
 
   //  //debug
   //  nh.loginfo("finished populating LUT");
@@ -860,11 +913,11 @@ void planMovement(float the_commanded_position_) {
   //debug print out accel_LUT stuff
   for (int j = 0; j < NUM_PLATEAUS; j++) {
     //debug only
-    //    sprintf(miscMsgs, "accel_LUT[1][0]=%d", accel_LUT[j][0]);
-    sprintf(miscMsgs, "accel_LUT[%d", j);
-    sprintf(miscMsgs2, "][0]=%d", accel_LUT[j][0]);
-    strcat(miscMsgs, miscMsgs2);
-    nh.loginfo(miscMsgs);
+    //    sprintf(miscMsgs, "accel_LUT[1][0]=%ld", accel_LUT[j][0]);
+    sprintf(miscMsgs9, "accel_LUT[%ld", j);
+    sprintf(miscMsgs10, "][0]=%ld", accel_LUT[j][0]);
+    strcat(miscMsgs9, miscMsgs10);
+    nh.loginfo(miscMsgs9);
     nh.spinOnce();
   }
   nh.loginfo("");
@@ -874,10 +927,10 @@ void planMovement(float the_commanded_position_) {
   for (int j = 0; j < NUM_PLATEAUS; j++) {
     //debug only
     //    sprintf(miscMsgs, "accel_LUT[1][0]=%d", accel_LUT[j][0]);
-    sprintf(miscMsgs, "accel_LUT[%d", j);
-    sprintf(miscMsgs2, "][1]=%d", accel_LUT[j][1]);
-    strcat(miscMsgs, miscMsgs2);
-    nh.loginfo(miscMsgs);
+    sprintf(miscMsgs11, "accel_LUT[%ld", j);
+    sprintf(miscMsgs12, "][1]=%ld", accel_LUT[j][1]);
+    strcat(miscMsgs11, miscMsgs12);
+    nh.loginfo(miscMsgs11);
     nh.spinOnce();
   }
   nh.loginfo("");
@@ -886,11 +939,11 @@ void planMovement(float the_commanded_position_) {
   //debug print out accel_LUT stuff
   for (int j = 0; j < NUM_PLATEAUS; j++) {
     //debug only
-    //    sprintf(miscMsgs, "accel_LUT[1][0]=%d", accel_LUT[j][0]);
-    sprintf(miscMsgs, "accel_LUT[%d", j);
-    sprintf(miscMsgs2, "][2]=%d", accel_LUT[j][2]);
-    strcat(miscMsgs, miscMsgs2);
-    nh.loginfo(miscMsgs);
+    //    sprintf(miscMsgs, "accel_LUT[1][0]=%ld", accel_LUT[j][0]);
+    sprintf(miscMsgs13, "accel_LUT[%ld", j);
+    sprintf(miscMsgs14, "][2]=%ld", accel_LUT[j][2]);
+    strcat(miscMsgs13, miscMsgs14);
+    nh.loginfo(miscMsgs13);
     nh.spinOnce();
   }
 
@@ -902,8 +955,8 @@ void planMovement(float the_commanded_position_) {
   steps_to_reach_max_vel_ = accel_LUT[NUM_PLATEAUS - 1][2];//correct
 
   //debug only
-  sprintf(miscMsgs, "steps_to_reach_max_vel_=%d", steps_to_reach_max_vel_);
-  nh.loginfo(miscMsgs);
+  sprintf(miscMsgs15, "steps_to_reach_max_vel_=%ld", steps_to_reach_max_vel_);
+  nh.loginfo(miscMsgs15);
   nh.spinOnce();
 
   //determine min_travel_time for this movement
@@ -913,8 +966,8 @@ void planMovement(float the_commanded_position_) {
     min_travel_time_ = (float)(2 * NUM_PLATEAUS * PLATEAU_DURATION);
 
     //debug only
-    sprintf(miscMsgs, "2nd reading dtg_stepper_counts_=%d", dtg_stepper_counts_);
-    nh.loginfo(miscMsgs);
+    sprintf(miscMsgs16, "2nd reading dtg_stepper_counts_=%ld", dtg_stepper_counts_);
+    nh.loginfo(miscMsgs16);
 
     //calc cruise steps
     cruise_steps_at_max_vel_ = (dtg_stepper_counts_ - ( 2 * steps_to_reach_max_vel_));//correct
@@ -954,13 +1007,13 @@ void planMovement(float the_commanded_position_) {
   }
 
   //debug only
-  sprintf(miscMsgs, "cruise_plateau_index=%d", cruise_plateau_index);
-  nh.loginfo(miscMsgs);
+  sprintf(miscMsgs17, "cruise_plateau_index=%d", cruise_plateau_index);
+  nh.loginfo(miscMsgs17);
   nh.spinOnce();
 
   //debug only
-  sprintf(miscMsgs, "cruise_steps_at_reduced_vel_=%d", cruise_steps_at_reduced_vel_);
-  nh.loginfo(miscMsgs);
+  sprintf(miscMsgs18, "cruise_steps_at_reduced_vel_=%ld", cruise_steps_at_reduced_vel_);
+  nh.loginfo(miscMsgs18);
   nh.spinOnce();
 
   //debug loginfo
@@ -1010,8 +1063,8 @@ void planMovement(float the_commanded_position_) {
     nh.spinOnce();
 
     //debug only
-    sprintf(miscMsgs, "cruise_plateau_index=%d", cruise_plateau_index);
-    nh.loginfo(miscMsgs);
+    sprintf(miscMsgs19, "cruise_plateau_index=%d", cruise_plateau_index);
+    nh.loginfo(miscMsgs19);
     nh.spinOnce();
 
     //  nh.loginfo("finished iterating LUT");
@@ -1030,12 +1083,12 @@ void planMovement(float the_commanded_position_) {
   decel_after_stepper_counts = accel_LUT[cruise_plateau_index][2];
 
   //debug only
-  sprintf(miscMsgs, "accel_until_stepper_counts=%d", accel_until_stepper_counts);
-  nh.loginfo(miscMsgs);
+  sprintf(miscMsgs20, "accel_until_stepper_counts=%ld", accel_until_stepper_counts);
+  nh.loginfo(miscMsgs20);
   nh.spinOnce();
   //debug only
-  sprintf(miscMsgs, "decel_after_stepper_counts=%d", decel_after_stepper_counts);
-  nh.loginfo(miscMsgs);
+  sprintf(miscMsgs21, "decel_after_stepper_counts=%ld", decel_after_stepper_counts);
+  nh.loginfo(miscMsgs21);
   nh.spinOnce();
 
   //  nh.loginfo("finished accel_until");
@@ -1044,8 +1097,8 @@ void planMovement(float the_commanded_position_) {
   //calculate exact number of cruise stepper counts
   cruising_stepper_counts = dtg_stepper_counts_ - (2 * accel_LUT[cruise_plateau_index][2]);
   //debug only
-  sprintf(miscMsgs, "cruising_stepper_counts=%d", cruising_stepper_counts);
-  nh.loginfo(miscMsgs);
+  sprintf(miscMsgs22, "cruising_stepper_counts=%ld", cruising_stepper_counts);
+  nh.loginfo(miscMsgs22);
   nh.spinOnce();
 
   //get direction of motion. positive distance defined as CW, negative as CCW
@@ -1081,8 +1134,13 @@ void planMovement(float the_commanded_position_) {
   current_plateau_steps_remaining = accel_LUT[current_plateau_index][1];
 
   //debug only
-  sprintf(miscMsgs, "3rd reading dtg_stepper_counts_=%d", dtg_stepper_counts_);
-  nh.loginfo(miscMsgs);
+  sprintf(miscMsgs23, "3rd reading dtg_stepper_counts_=%ld", dtg_stepper_counts_);
+  nh.loginfo(miscMsgs23);
+  nh.spinOnce();
+
+  sprintf(miscMsgs24, "long encoder_1_pos=%ld", encoder_1_pos);
+  nh.loginfo(miscMsgs24);
+  nh.spinOnce();
 
   nh.loginfo("exiting planMovement()");
   nh.spinOnce();
@@ -1121,16 +1179,16 @@ void publishAll() {
   //    sprintf(miscMsgs, "publish_counter=%d", publish_counter);
   //    publish_counter++;
   //    nh.loginfo(miscMsgs);
-  nh.spinOnce();
+  //  nh.spinOnce();
 
   //populate data
   state.data = states_msg;
 
   //debug only
-  //  sprintf(miscMsgs, "encoder_1_pos=%d", encoder_1_pos);
+  //  sprintf(miscMsgs, "encoder_1_pos=%ld", encoder_1_pos);
   //  nh.loginfo(miscMsgs);
   //  nh.spinOnce();
-  //  sprintf(miscMsgs, "encoder_2_pos=%d", encoder_2_pos);
+  //  sprintf(miscMsgs, "encoder_2_pos=%ld", encoder_2_pos);
   //  nh.loginfo(miscMsgs);
   //  nh.spinOnce();
   //  sprintf(miscMsgs, "current_pos=%d", current_pos);
@@ -1141,19 +1199,23 @@ void publishAll() {
     case SL_IDENT:
       SL_joint_encoder_pos_pub.publish( &joint_encoder_pos );
       SL_stepper_count_pos_pub.publish( &stepper_count_pos );
+      nh.spinOnce();
       SL_stepper_encoder_pos_pub.publish( &stepper_encoder_pos );
       SL_torque_pub.publish( &torque );
       //      SL_joint_state_pub.publish( &BR_joint_state );
       SL_state_pub.publish( &state );
       SL_state2_pub.publish( &state2 );
+      nh.spinOnce();
       break;
     case UR_IDENT:
       UR_joint_encoder_pos_pub.publish( &joint_encoder_pos );
       UR_stepper_count_pos_pub.publish( &stepper_count_pos );
+      nh.spinOnce();
       UR_stepper_encoder_pos_pub.publish( &stepper_encoder_pos );
       UR_torque_pub.publish( &torque );
       //      UR_joint_state_pub.publish( &BR_joint_state );
       UR_state_pub.publish( &state );
+      nh.spinOnce();
       break;
     case EL_IDENT:
       EL_joint_encoder_pos_pub.publish( &joint_encoder_pos );
@@ -1161,17 +1223,19 @@ void publishAll() {
       nh.spinOnce();
       EL_stepper_encoder_pos_pub.publish( &stepper_encoder_pos );
       EL_torque_pub.publish( &torque );
-      nh.spinOnce();
       //      EL_joint_state_pub.publish( &BR_joint_state );
       EL_state_pub.publish( &state );
+      nh.spinOnce();
       break;
     case LR_IDENT:
       LR_joint_encoder_pos_pub.publish( &joint_encoder_pos );
       LR_stepper_count_pos_pub.publish( &stepper_count_pos );
+      nh.spinOnce();
       LR_stepper_encoder_pos_pub.publish( &stepper_encoder_pos );
       LR_torque_pub.publish( &torque );
       //      LR_joint_state_pub.publish( &BR_joint_state );
       LR_state_pub.publish( &state );
+      nh.spinOnce();
       break;
     default:
       break;
@@ -1337,31 +1401,49 @@ void loop() {
     // to do ?Add a if (!nh.connected()){spinOnce()} else {updateStatus()};
     //    nh.loginfo("updating");
 
-//    sprintf(miscMsgs, "steps_remaining=%d", steps_remaining);
-//    nh.loginfo(miscMsgs);
-//    nh.spinOnce();
+    //    sprintf(miscMsgs, "steps_remaining=%ld", steps_remaining);
+    //    nh.loginfo(miscMsgs);
+    //    nh.spinOnce();
 
-//  //debug
-//  sprintf(miscMsgs, "encoder_1_pos=%d", encoder_1_pos);
-//  nh.loginfo(miscMsgs);
-//  nh.spinOnce();
-    
-//  //debug get the distance to go
-//  current_pos = getCurrentPos(encoder_1_pos); // uses doe as joint reference for now. Eventually will be aoe.
-//
-//  //debug loginfo 
-//  char result[16]; // Buffer big enough for 15-character float
-//  dtostrf(current_pos, 14, 2, result); // Leave room for too large numbers!
-//  nh.loginfo("current_pos=");//this works
-//  nh.loginfo(result);//this works
-//  nh.spinOnce();
+    //  //debug
+    sprintf(miscMsgs25, "encoder_1_pos=%ld", encoder_1_pos);
+    nh.loginfo(miscMsgs25);
+    nh.spinOnce();
+    sprintf(miscMsgs26, "encoder_2_pos=%ld", encoder_2_pos);
+    nh.loginfo(miscMsgs27);
+    nh.spinOnce();
+
+    //  //debug get the distance to go
+    //  current_pos = getCurrentPos(encoder_1_pos); // uses doe as joint reference for now. Eventually will be aoe.
+    //
+    //  //debug loginfo
+    //  char result[16]; // Buffer big enough for 15-character float
+    //  dtostrf(current_pos, 14, 2, result); // Leave room for too large numbers!
+    //  nh.loginfo("current_pos=");//this works
+    //  nh.loginfo(result);//this works
+    //  nh.spinOnce();
 
     readSensors();
     publishAll();
+
+    //    noInterrupts();
     next_update = millis() + UPDATE_INTERVAL;
+    //    interrupts();
 
+  }// end if next_update
 
-  }
+  //loop still alive indication
+  int_loop_counter++;
+  if (int_loop_counter % 1000 == 0) {
+    nh.loginfo("looping");
+    sprintf(miscMsgs28, "millis()=%ld", millis());
+    nh.loginfo(miscMsgs28);
+    nh.spinOnce();
+    sprintf(miscMsgs29, "next_update=%ld", next_update);
+    nh.loginfo(miscMsgs29);
+    nh.spinOnce();
+    int_loop_counter = 0;
+  }//end if int_loop_counter
 
   nh.spinOnce();
 }
