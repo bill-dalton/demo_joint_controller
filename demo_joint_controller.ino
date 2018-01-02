@@ -10,7 +10,8 @@
    scheme will be used for accel and decel. Each of the four Megas and the single Due
    will publish and subscribe ROS topics via USB to the laptop running roscore.
 
-
+   IMPORTANT - DO NOT REUSE char miscMsgs[20] for nh.loginfo. Create a new micsMsgs for each use.
+   Otherwise reusing somehow changes the value of my global variables which is VERY hard to debug!
 
    (C) 2017 William Dalton
 */
@@ -177,34 +178,36 @@ volatile long stepper_counts = 0; //stepper position in stepper steps
 //stepper system constants
 const int STEPPER_STEPS_PER_REV = 200;  //stepper motor specific
 const float STEPPER_DEGREES_PER_STEP = (float) (1 / STEPPER_STEPS_PER_REV);//s.b. 1.8 degrees
-const int MICROSTEPS = 4;               //set on stepper driver
-const float GEAR_RATIO = 65.0;
+const int MICROSTEPS = 8;               //set on stepper driver
+float gear_ratio = 65.0;  //NOT USED?
 
-//encoder constants
-const int ENCODER_1_PPR = 2400;
-const float ENCODER_1_GEAR_RATIO = 18.055;            //ratio final joint motion to doe encoder motion = 65/3.6
-const float ENCODER_1_DEGREES_PER_COUNT = 0.0083;       //=360 / ENCODER_1_PPR / ENCODER_1_GEAR_RATIO;//360/2400/5.0=0.03degrees
-const int ENCODER_2_PPR = 2400;                       //in encoder counts, used for stepper_doe
-const float ENCODER_2_GEAR_RATIO = 15.0;              //ratio final joint motion to stepper doe encoder motion
-const float ENCODER_2_DEGREES_PER_COUNT = 0.01;       //=360 / ENCODER_2_PPR / ENCODER_2_GEAR_RATIO;//360/2400/15.0=0.01degrees
-const float ENCODER_1_COUNTS_PER_STEPPER_COUNT = 36.0;//= GEAR_REDUCTION_RATIO_STEPPER_TO_SERIES_ELASTIC * ENCODER_1_PPR / (STEPPER_STEPS_PER_REV * MICROSTEPS);
+//encoder constants - ONY USED TO CREATE OTHER CONSTANTS
+//const int ENCODER_1_PPR = 2400;
+//const float ENCODER_1_GEAR_RATIO = 18.055;            //ratio final joint motion to doe encoder motion = 65/3.6
+//const float ENCODER_1_DEGREES_PER_COUNT = 0.0083;       //=360 / ENCODER_1_PPR / ENCODER_1_GEAR_RATIO;//360/2400/5.0=0.03degrees
+//const int ENCODER_2_PPR = 2400;                       //in encoder counts, used for stepper_doe
+//const float ENCODER_2_GEAR_RATIO = 15.0;              //ratio final joint motion to stepper doe encoder motion
+//const float ENCODER_2_DEGREES_PER_COUNT = 0.01;       //=360 / ENCODER_2_PPR / ENCODER_2_GEAR_RATIO;//360/2400/15.0=0.01degrees
+//const float ENCODER_1_COUNTS_PER_STEPPER_COUNT = 36.0;//= GEAR_REDUCTION_RATIO_STEPPER_TO_SERIES_ELASTIC * ENCODER_1_PPR / (STEPPER_STEPS_PER_REV * MICROSTEPS);
 /*
    special case encoder constants for AndyMark encoder mounted on S-E assembly.
    gear ratio for AndyMark encoder to SL joint = 19.741 = (59T/23T)*(59T/23T)*(6"/2")
    Normally and eventuall, an encoder (analog or digital) will be mounted directly on joint itself.
    The following are ratios between the joint itself and the shaft on which the joint encoder is located
    SL_JOINT_ENCODER_GEAR_RATIO = 19.741 = (59T/23T)*(59T/23T)*(6"/2")
-   UR_JOINT_ENCODER_GEAR_RATIO =  = ( / )*( /)*(5"/2")
-   EL_JOINT_ENCODER_GEAR_RATIO =  = ( / )*( /)*(2"/2")*( /)
+   SL_JOINT_ENCODER_GEAR_RATIO = 17.754 = (59T/25T)*(59T/23T)*(6.1"/2.08")
+   UR_JOINT_ENCODER_GEAR_RATIO = 13.825 = (59T/25T)*(59T/23T)*(4.75"/2.08")
+   EL_JOINT_ENCODER_GEAR_RATIO = 11.787 = (71T/13T)*(59T/23T)*()*(1.75"/2.08")
    LR_JOINT_ENCODER_GEAR_RATIO =  = ( / )*( /)*(1.5"/2")*( /)
    SL_JOINT_ENCODER_PPR = 1440;                   //for AndyMark encoder
    UR_JOINT_ENCODER_PPR = 1440;                   //for AndyMark encoder
    EL_JOINT_ENCODER_PPR = 1440;                   //for AndyMark encoder
    LR_JOINT_ENCODER_PPR = 1440;                   //for AndyMark encoder
 */
-const float SL_JOINT_DEGREES_PER_ENCODER_COUNT = 0.01284; //0.01284=360/1440/19.741=360/SL_JOINT_ENCODER_PPR/SL_JOINT_ENCODER_GEAR_RATIO
-const float UR_JOINT_DEGREES_PER_ENCODER_COUNT = 0.01284; //0.01284=360/1440/19.741
-const float EL_JOINT_DEGREES_PER_ENCODER_COUNT = 0.01284; //0.01284=360/1440/19.741
+//const float SL_JOINT_DEGREES_PER_ENCODER_COUNT = 0.01284; //0.01284=360/1440/19.741=360/SL_JOINT_ENCODER_PPR/SL_JOINT_ENCODER_GEAR_RATIO
+const float SL_JOINT_DEGREES_PER_ENCODER_COUNT = 0.01408; //0.01284=360/1440/17.754=360/SL_JOINT_ENCODER_PPR/SL_JOINT_ENCODER_GEAR_RATIO
+const float UR_JOINT_DEGREES_PER_ENCODER_COUNT = 0.01808; //0.01284=360/1440/13.825
+const float EL_JOINT_DEGREES_PER_ENCODER_COUNT = 0.02121; //0.01284=360/1440/11.787
 const float LR_JOINT_DEGREES_PER_ENCODER_COUNT = 0.01284; //0.01284=360/1440/19.741
 
 //encoder variables
@@ -220,11 +223,15 @@ const float MAX_VEL = 25.0;   //degrees/sec
 const float MAX_ACCEL = 10.0; //degrees/sec^2
 const float MIN_TIME_TO_REACH_MAX_VEL = MAX_VEL / MAX_ACCEL;//in seconds
 const float MIN_TRAVEL_TO_REACH_MAX_VEL = MIN_TIME_TO_REACH_MAX_VEL * ((MAX_VEL + MAX_ACCEL) / 2);
-const float DEGREES_PER_MICROSTEP = 0.006923;// = 0.03; //= 360 / (STEPPER_STEPS_PER_REV * MICROSTEPS) / GEAR_RATIO;
+//const float DEGREES_PER_MICROSTEP = 0.006923;// = 0.03; //= 360 / (STEPPER_STEPS_PER_REV * MICROSTEPS) / GEAR_RATIO;
 const float POSITION_HOLD_TOLERANCE = 0.2;    //in degrees
 const long POSITION_ADJUSTMENT_SPEED = 5000;  //stepper period interval speed at which to make position adjustments
 const float RETREAT_DISTANCE = 1.0;           //degrees to retreat
 const long QUEUE_SIZE = 100;//100*8bytes=800 bytes
+const float SL_DEGREES_PER_MICROSTEP = 0.00352;//= (360/GEAR_RATIO)/(STEPPER_STEPS_PER_REV*MICROSTEPS);
+const float UR_DEGREES_PER_MICROSTEP = 0.00452;//= (360/GEAR_RATIO)/(STEPPER_STEPS_PER_REV*MICROSTEPS);
+const float EL_DEGREES_PER_MICROSTEP = 0.00530;//= (360/GEAR_RATIO)/(STEPPER_STEPS_PER_REV*MICROSTEPS);
+const float LR_DEGREES_PER_MICROSTEP = 0.0035; //= (360/GEAR_RATIO)/(STEPPER_STEPS_PER_REV*MICROSTEPS);
 
 //torque limits - To Do constants for now, but eventually variables that are function of MoveIt motion plan output
 const float YELLOW_LIMIT = 10.0;//torque yellow limit in degrees of joint travel - To Do make function of MoveIt motion plan output
@@ -244,7 +251,8 @@ volatile long decel_after_stepper_counts = 0;//in absolute value of stepper coun
 volatile long cruising_stepper_counts = 0;
 volatile long steps_remaining = 0; //stepper steps remaining to move. uses in final_approach and holding_position
 volatile long current_plateau_steps_remaining = 0;
-volatile long close_enough = POSITION_HOLD_TOLERANCE * DEGREES_PER_MICROSTEP;//position holding tolerance in stepper steps
+volatile long close_enough = 100L;  //reset in setup() to value for particular joint
+volatile float degrees_per_microstep = 0.007; //reset to particulr joint in setup()
 
 //my queue
 volatile long my_queue[QUEUE_SIZE];
@@ -893,7 +901,7 @@ void planMovement(float the_commanded_position_) {
   nh.loginfo(result);//this works
 
   //convert dtg_ in degrees to dtg_stepper_counts_
-  dtg_stepper_counts_ = (long) abs(dtg_ / DEGREES_PER_MICROSTEP);
+  dtg_stepper_counts_ = (long) abs(dtg_ / degrees_per_microstep);
 
   //debug only
   sprintf(miscMsgs8, "dtg_stepper_counts_=%ld", dtg_stepper_counts_);
@@ -1164,7 +1172,7 @@ void readSensors() {
   //WORKING HERE 12/13/17
   //gear ratio SL joint to AndyMark encoder on S-E joint = 19.741 = (6/2)*(59T/23T)*(59T/23T)
   joint_encoder_pos.data = -1.0 * ((float) encoder_1_pos) * joint_degrees_per_encoder_count;//TO DO change this to true joint encoder after joint encoder actually installed
-  stepper_count_pos.data = ((float) stepper_counts) * DEGREES_PER_MICROSTEP;
+  stepper_count_pos.data = ((float) stepper_counts) * degrees_per_microstep;
   stepper_encoder_pos.data = 9.99;//stepper_doe_pos TO DO placeholder value for now
   torque.data = joint_encoder_pos.data - stepper_count_pos.data;//TO DO convert to joint_encoder_pos.data -stepper_encoder_pos.data
 
@@ -1288,11 +1296,19 @@ void setup() {
   nh.initNode();
   nh.subscribe(commanded_joint_positions_sub);
 
-  //use swtich to only setup encoders, pubs and subs needed for this minion's joint
+  /*
+    use switch to setup each joint's needs:
+      joint_degrees_per_encoder_count
+      degrees per microstep
+      encoders, pubs and subs
+  */
+
+  // only encoders, pubs and subs needed for this minion's joint
   switch (minion_ident) {
     case SL_IDENT:
       // SL joint
       joint_degrees_per_encoder_count = SL_JOINT_DEGREES_PER_ENCODER_COUNT;
+      degrees_per_microstep = SL_DEGREES_PER_MICROSTEP;
       nh.advertise(SL_joint_encoder_pos_pub);
       nh.advertise(SL_stepper_count_pos_pub);
       nh.advertise(SL_stepper_encoder_pos_pub);
@@ -1305,6 +1321,7 @@ void setup() {
     case UR_IDENT:
       // UR joint
       joint_degrees_per_encoder_count = UR_JOINT_DEGREES_PER_ENCODER_COUNT;
+      degrees_per_microstep = UR_DEGREES_PER_MICROSTEP;
       nh.advertise(UR_joint_encoder_pos_pub);
       nh.advertise(UR_stepper_count_pos_pub);
       nh.advertise(UR_stepper_encoder_pos_pub);
@@ -1316,6 +1333,7 @@ void setup() {
     case EL_IDENT:
       // EL joint
       joint_degrees_per_encoder_count = EL_JOINT_DEGREES_PER_ENCODER_COUNT;
+      degrees_per_microstep = EL_DEGREES_PER_MICROSTEP;
       nh.advertise(EL_joint_encoder_pos_pub);
       nh.advertise(EL_stepper_count_pos_pub);
       nh.advertise(EL_stepper_encoder_pos_pub);
@@ -1327,6 +1345,7 @@ void setup() {
     case LR_IDENT:
       // LR joint
       joint_degrees_per_encoder_count = LR_JOINT_DEGREES_PER_ENCODER_COUNT;
+      degrees_per_microstep = LR_DEGREES_PER_MICROSTEP;
       nh.advertise(LR_joint_encoder_pos_pub);
       nh.advertise(LR_stepper_count_pos_pub);
       nh.advertise(LR_stepper_encoder_pos_pub);
@@ -1338,6 +1357,9 @@ void setup() {
     default:
       break;
   }//end switch case
+
+  //set position hold tolerance as function of degrees_per_microstep set in switch case above
+  close_enough = POSITION_HOLD_TOLERANCE * degrees_per_microstep;//position holding tolerance in stepper steps
 
   nh.spinOnce();
 
@@ -1357,7 +1379,7 @@ void setup() {
   for (int i = 0; i < NUM_PLATEAUS; i++) {
     //first column is period
     vel_deg_per_sec_ = i * MAX_ACCEL * PLATEAU_DURATION;
-    vel_steps_per_sec_ = vel_deg_per_sec_ / DEGREES_PER_MICROSTEP;
+    vel_steps_per_sec_ = vel_deg_per_sec_ / degrees_per_microstep;
     period_ = (long) ((1 / vel_steps_per_sec_ ) * 1000000);//works
     accel_LUT[i][0] = period_;
     //second column is number of pulses in this plateau
@@ -1410,7 +1432,7 @@ void loop() {
     nh.loginfo(miscMsgs25);
     nh.spinOnce();
     sprintf(miscMsgs26, "encoder_2_pos=%ld", encoder_2_pos);
-    nh.loginfo(miscMsgs27);
+    nh.loginfo(miscMsgs26);
     nh.spinOnce();
 
     //  //debug get the distance to go
@@ -1433,17 +1455,17 @@ void loop() {
   }// end if next_update
 
   //loop still alive indication
-  int_loop_counter++;
-  if (int_loop_counter % 1000 == 0) {
-    nh.loginfo("looping");
-    sprintf(miscMsgs28, "millis()=%ld", millis());
-    nh.loginfo(miscMsgs28);
-    nh.spinOnce();
-    sprintf(miscMsgs29, "next_update=%ld", next_update);
-    nh.loginfo(miscMsgs29);
-    nh.spinOnce();
-    int_loop_counter = 0;
-  }//end if int_loop_counter
+  //  int_loop_counter++;
+  //  if (int_loop_counter % 1000 == 0) {
+  //    nh.loginfo("looping");
+  //    sprintf(miscMsgs27, "millis()=%ld", millis());
+  //    nh.loginfo(miscMsgs27);
+  //    nh.spinOnce();
+  //    sprintf(miscMsgs28, "next_update=%ld", next_update);
+  //    nh.loginfo(miscMsgs28);
+  //    nh.spinOnce();
+  //    int_loop_counter = 0;
+  //  }//end if int_loop_counter
 
   nh.spinOnce();
 }
