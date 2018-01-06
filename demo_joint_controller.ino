@@ -207,7 +207,7 @@ float gear_ratio = 65.0;  //NOT USED?
 //const float SL_JOINT_DEGREES_PER_ENCODER_COUNT = 0.01284; //0.01284=360/1440/19.741=360/SL_JOINT_ENCODER_PPR/SL_JOINT_ENCODER_GEAR_RATIO
 const float SL_JOINT_DEGREES_PER_ENCODER_COUNT = 0.01408; //0.01284=360/1440/17.754=360/SL_JOINT_ENCODER_PPR/SL_JOINT_ENCODER_GEAR_RATIO
 const float UR_JOINT_DEGREES_PER_ENCODER_COUNT = 0.01808; //0.01284=360/1440/13.825
-const float EL_JOINT_DEGREES_PER_ENCODER_COUNT = 0.02121; //0.01284=360/1440/11.787
+const float EL_JOINT_DEGREES_PER_ENCODER_COUNT = 0.005698; //0.01284=360/1440/43.8749
 const float LR_JOINT_DEGREES_PER_ENCODER_COUNT = 0.01284; //0.01284=360/1440/19.741
 
 //encoder variables
@@ -230,7 +230,7 @@ const float RETREAT_DISTANCE = 1.0;           //degrees to retreat
 const long QUEUE_SIZE = 100;//100*8bytes=800 bytes
 const float SL_DEGREES_PER_MICROSTEP = 0.00352;//= (360/GEAR_RATIO)/(STEPPER_STEPS_PER_REV*MICROSTEPS);
 const float UR_DEGREES_PER_MICROSTEP = 0.00452;//= (360/GEAR_RATIO)/(STEPPER_STEPS_PER_REV*MICROSTEPS);
-const float EL_DEGREES_PER_MICROSTEP = 0.00530;//= (360/GEAR_RATIO)/(STEPPER_STEPS_PER_REV*MICROSTEPS);
+const float EL_DEGREES_PER_MICROSTEP = 0.0014245;//= (360/GEAR_RATIO)/(STEPPER_STEPS_PER_REV*MICROSTEPS);
 const float LR_DEGREES_PER_MICROSTEP = 0.0035; //= (360/GEAR_RATIO)/(STEPPER_STEPS_PER_REV*MICROSTEPS);
 
 //torque limits - To Do constants for now, but eventually variables that are function of MoveIt motion plan output
@@ -483,7 +483,7 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
     nh.loginfo("reset all vars to zero");
   }// end of command 400
 
-}// end commandedPositionCallback()
+}// end commandedJointPositionsCallback()
 
 //subscribers
 ros::Subscriber<std_msgs::String> commanded_joint_positions_sub("commanded_joint_positions", commandedJointPositionsCallback);
