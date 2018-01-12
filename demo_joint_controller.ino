@@ -256,12 +256,12 @@ const float RED_LIMIT = 25.0;
 
 //motion variables
 volatile float required_duration;    //required duration in seconds for joint movement
-volatile float commanded_position = 0.0; //joint commanded_position in degrees
+volatile float commanded_stepper_position = 0.0; //joint commanded_stepper_position in degrees
 volatile int cruise_plateau_index = 0;  //index of fastest plateau to be used in a particular movement
 volatile int current_plateau_index = 0;
 volatile bool direction_CW = true;   //movement in positive joint direction is defined as CW
 volatile float current_pos = 0.0;    //joint position in degrees
-volatile float pos_error = 0.0;    //difference in degrees between joint commanded_position and joint current position
+volatile float pos_error = 0.0;    //difference in degrees between joint commanded_stepper_position and joint current position
 volatile long dtg_stepper_counts = 0;//in absolute value of stepper counts
 volatile long accel_until_stepper_counts = 0;//in absolute value of stepper counts
 volatile long decel_after_stepper_counts = 0;//in absolute value of stepper counts
@@ -351,24 +351,24 @@ float test_var = 56.66;
 //subscriber call backs
 //void commandedPositionCallback(const std_msgs::Float32& the_command_msg_) {
 //  //DEPRECATED - action to be taken when msg received on topic BR_cmd. SL_cmd, etc
-//  static float previous_commanded_position_;
+//  static float previous_commanded_stepper_position_;
 //  float the_commanded_position_ = the_command_msg_.data;
 //
 //  /*
 //    check for special commands. Normal range of commands is +/- 179.999 degrees,
 //    therefore anything outside of that range is considered a special command
-//    commanded_position ~=400 -> means set all values to zero
+//    commanded_stepper_position ~=400 -> means set all values to zero
 //  */
 //  if (the_commanded_position_ > -359.99 && the_commanded_position_ < 359.99) {
 //    //this is a regular command
 //    //record commanded position as a global
-//    commanded_position = the_command_msg_.data;
+//    commanded_stepper_position = the_command_msg_.data;
 //
 //    //check this is not a repeated command to the same position
-//    if (commanded_position != previous_commanded_position_) {
+//    if (commanded_stepper_position != previous_commanded_position_) {
 //      //this is a new command. Plan and execute motion
 //      //set previous commanded position
-//      previous_commanded_position_ = commanded_position;
+//      previous_commanded_position_ = commanded_stepper_position;
 //      //set flag
 //      new_plan = true;
 //    }
@@ -468,12 +468,18 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
   }//end switch case
 
   /* determine commanded_stepper_position by applying JOINT_POSITION_CORRECTION_FACTORS to
-     commanded_joint_positions_
+     commanded_joint_positions_.
+     start with command_joint_position for this joint, then add compensations from
+     upsstream joints
   */
+  commanded_stepper_position = commanded_joint_positions_[joint_index];
+  for (int n = 2; n < joint_index; n++) {
+    commanded_stepper_position += commanded_joint_positions_[n] * JOINT_POSITION_CORRECTION_FACTORS[joint_index - 2][n - 2];
+  }
 
   //assign required duration and commanded position
   required_duration = commanded_joint_positions_[1];
-  commanded_position = commanded_joint_positions_[joint_index];
+  //commanded_stepper_position = commanded_joint_positions_[joint_index];
 
   //debug loginfo commanded position
   char result5[8]; // Buffer big enough for 7-character float
@@ -483,12 +489,12 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
 
   //debug loginfo commanded position
   char result[8]; // Buffer big enough for 7-character float
-  dtostrf(commanded_position, 6, 2, result); // Leave room for too large numbers!
-  nh.loginfo("commanded_position=");//this works
+  dtostrf(commanded_stepper_position, 6, 2, result); // Leave room for too large numbers!
+  nh.loginfo("commanded_stepper_position=");//this works
   nh.loginfo(result);//this works
 
   //check for Command 400 to set all values to zero
-  if (commanded_position > 399.5 && commanded_position < 400.5) {
+  if (commanded_stepper_position > 399.5 && commanded_stepper_position < 400.5) {
     //Command 400 - set all values to zero
     encoder_1_pos = 0;
     encoder_2_pos = 0;
@@ -497,7 +503,7 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
     dtg_stepper_counts = 0;
     steps_remaining = 0;
     //    previous_commanded_position_ = 0.0;
-    commanded_position = 0.0;
+    commanded_stepper_position = 0.0;
     new_plan = false;
 
     //log
@@ -1201,7 +1207,7 @@ void readSensors() {
 
 void publishAll() {
   //publish stuff for this joint
-  //  torque.data = commanded_position;
+  //  torque.data = commanded_stepper_position;
 
   //debug only
   //      static int publish_counter = 0;
@@ -1431,7 +1437,7 @@ void loop() {
 
   //  determine motion needed and begin moving
   if (new_plan)     {
-    planMovement(commanded_position);
+    planMovement(commanded_stepper_position);
     //    nh.loginfo("finished if new_plan 1");
     new_plan = false;
     //    nh.loginfo("finished if new_plan 2");
