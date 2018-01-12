@@ -232,6 +232,23 @@ const float SL_DEGREES_PER_MICROSTEP = 0.00352;//= (360/GEAR_RATIO)/(STEPPER_STE
 const float UR_DEGREES_PER_MICROSTEP = 0.00452;//= (360/GEAR_RATIO)/(STEPPER_STEPS_PER_REV*MICROSTEPS);
 const float EL_DEGREES_PER_MICROSTEP = 0.0014245;//= (360/GEAR_RATIO)/(STEPPER_STEPS_PER_REV*MICROSTEPS);
 const float LR_DEGREES_PER_MICROSTEP = 0.0035; //= (360/GEAR_RATIO)/(STEPPER_STEPS_PER_REV*MICROSTEPS);
+/*
+  this is a symetrical n x n array where n is the number of joints
+  The joints are in order BR, SL, UR, EL, LR; wherein in BR is the 0th element, SL the 1st and so on.
+  These compensation factors corrects for change in cable path length for driving cables due
+  to change in upstream joints positions as cables wrap and unwrap around pulley on axis
+  of upstream joints.
+  For example below the 0.438 factor in position [1][2] says that UR joint will change position
+  by 0.438 times the change in the SL position
+*/
+
+const float JOINT_POSITION_CORRECTION_FACTORS[5][5] = {
+  {0.0, 0.0, 0.0, 0.0, 0.0},
+  {0.0, 0.0, 0.438, 0.319, 0.0},
+  {0.0, 0.438, 0.0, 0.09, 0.0},
+  {0.0, 0.319, 0.09, 0.0, 0.0},
+  {0.0, 0.0, 0.0, 0.0, 0.0}
+};
 
 //torque limits - To Do constants for now, but eventually variables that are function of MoveIt motion plan output
 const float YELLOW_LIMIT = 10.0;//torque yellow limit in degrees of joint travel - To Do make function of MoveIt motion plan output
@@ -369,7 +386,7 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
   */
   int current_command_number_ = 0;
   static int previous_command_number_ = 0;//unique integer identify this command
-  float joint_commands_[6];//array holding req'd duration and commanded position in degrees in order: BR,SL,UR,EL,LR
+  float commanded_joint_positions_[6];//array holding req'd duration and commanded position in degrees in order: BR,SL,UR,EL,LR
 
   //parse command
   inbound_message[0] = (char)0;  //"empties inbound_message by setting first char in string to 0
@@ -392,11 +409,11 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
   char* command;
   //  command = strtok(test_message, ",");//works
   command = strtok(inbound_message, ",");//works
-  //joint_commands_[0] = atof(command);
-  joint_commands_[0] = atoi(command);//retrieves unique command message number
+  //commanded_joint_positions_[0] = atof(command);
+  commanded_joint_positions_[0] = atoi(command);//retrieves unique command message number
 
   //check this is not a repeated command
-  current_command_number_ = joint_commands_[0];
+  current_command_number_ = commanded_joint_positions_[0];
   if (current_command_number_ != previous_command_number_) {
     //this is a new command. Plan and execute motion
     //set previous commanded position
@@ -411,8 +428,8 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
 
   //  //debug loginfo
   //  char result2[8]; // Buffer big enough for 7-character float
-  //  dtostrf(joint_commands_[0], 6, 2, result2); // Leave room for too large numbers!
-  //  nh.loginfo("joint_commands_[0]=");//this works
+  //  dtostrf(commanded_joint_positions_[0], 6, 2, result2); // Leave room for too large numbers!
+  //  nh.loginfo("commanded_joint_positions_[0]=");//this works
   //  nh.loginfo(result2);//this works
 
   //  //debug pub to state2 topic
@@ -425,7 +442,7 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
   while (command != 0)
   {
     command = strtok(0, ",");//note "0" i.e. null as input for subsequent calls to strtok()
-    joint_commands_[joint_index] = atof(command);
+    commanded_joint_positions_[joint_index] = atof(command);
     joint_index++;
   }
 
@@ -450,9 +467,13 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
       break;
   }//end switch case
 
+  /* determine commanded_stepper_position by applying JOINT_POSITION_CORRECTION_FACTORS to
+     commanded_joint_positions_
+  */
+
   //assign required duration and commanded position
-  required_duration = joint_commands_[1];
-  commanded_position = joint_commands_[joint_index];
+  required_duration = commanded_joint_positions_[1];
+  commanded_position = commanded_joint_positions_[joint_index];
 
   //debug loginfo commanded position
   char result5[8]; // Buffer big enough for 7-character float
@@ -1289,8 +1310,8 @@ void setup() {
 
 
   //setup publishers and subscribers
-//  nh.getHardware()->setBaud(230400);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
-    nh.getHardware()->setBaud(115200);//06Jan2018 lowered to 115200 for compatiblity with simultaneous running of Arduino Due //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
+  //  nh.getHardware()->setBaud(230400);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
+  nh.getHardware()->setBaud(115200);//06Jan2018 lowered to 115200 for compatiblity with simultaneous running of Arduino Due //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
   //  nh.getHardware()->setBaud(57600);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
   //    nh.getHardware()->setBaud(9600);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
   nh.initNode();
@@ -1428,12 +1449,12 @@ void loop() {
     //    nh.spinOnce();
 
     //  //debug
-//    sprintf(miscMsgs25, "encoder_1_pos=%ld", encoder_1_pos);
-//    nh.loginfo(miscMsgs25);
-//    nh.spinOnce();
-//    sprintf(miscMsgs26, "encoder_2_pos=%ld", encoder_2_pos);
-//    nh.loginfo(miscMsgs26);
-//    nh.spinOnce();
+    //    sprintf(miscMsgs25, "encoder_1_pos=%ld", encoder_1_pos);
+    //    nh.loginfo(miscMsgs25);
+    //    nh.spinOnce();
+    //    sprintf(miscMsgs26, "encoder_2_pos=%ld", encoder_2_pos);
+    //    nh.loginfo(miscMsgs26);
+    //    nh.spinOnce();
 
     //  //debug get the distance to go
     //  current_pos = getCurrentPos(encoder_1_pos); // uses doe as joint reference for now. Eventually will be aoe.
