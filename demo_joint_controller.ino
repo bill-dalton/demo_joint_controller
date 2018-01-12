@@ -244,8 +244,8 @@ const float LR_DEGREES_PER_MICROSTEP = 0.0035; //= (360/GEAR_RATIO)/(STEPPER_STE
 
 const float JOINT_POSITION_CORRECTION_FACTORS[5][5] = {
   {0.0, 0.0, 0.0, 0.0, 0.0},
-  {0.0, 0.0, 0.438, 0.319, 0.0},
-  {0.0, 0.438, 0.0, 0.09, 0.0},
+  {0.0, 0.0, -0.438, 0.319, 0.0},
+  {0.0, -0.438, 0.0, 0.09, 0.0},
   {0.0, 0.319, 0.09, 0.0, 0.0},
   {0.0, 0.0, 0.0, 0.0, 0.0}
 };
@@ -479,7 +479,7 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
 
   //assign required duration and commanded position
   required_duration = commanded_joint_positions_[1];
-  //commanded_stepper_position = commanded_joint_positions_[joint_index];
+  //commanded_stepper_position = commanded_joint_positions_[joint_index];//deprecated by use of JOINT_POSITION_CORRECTION_FACTORS
 
   //debug loginfo commanded position
   char result5[8]; // Buffer big enough for 7-character float
