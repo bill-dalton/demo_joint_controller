@@ -54,6 +54,12 @@
 */
 
 /*
+   modifications 7/20/18 to run cycloidal drive test rig as simulated WL joint
+   1. increase number of joints to add WL
+   2.
+*/
+
+/*
    TO DO
    done - @ident & switch case for joint identification
    done - @commanded_joint_positions method
@@ -181,7 +187,7 @@ const float STEPPER_DEGREES_PER_STEP = (float) (1 / STEPPER_STEPS_PER_REV);//s.b
 const int MICROSTEPS = 8;               //set on stepper driver
 float gear_ratio = 65.0;  //NOT USED?
 
-//encoder constants - ONY USED TO CREATE OTHER CONSTANTS
+//encoder constants - ONLY USED TO CREATE OTHER CONSTANTS
 //const int ENCODER_1_PPR = 2400;
 //const float ENCODER_1_GEAR_RATIO = 18.055;            //ratio final joint motion to doe encoder motion = 65/3.6
 //const float ENCODER_1_DEGREES_PER_COUNT = 0.0083;       //=360 / ENCODER_1_PPR / ENCODER_1_GEAR_RATIO;//360/2400/5.0=0.03degrees
@@ -209,6 +215,7 @@ const float SL_JOINT_DEGREES_PER_ENCODER_COUNT = 0.01408; //0.01284=360/1440/17.
 const float UR_JOINT_DEGREES_PER_ENCODER_COUNT = 0.01808; //0.01284=360/1440/13.825
 const float EL_JOINT_DEGREES_PER_ENCODER_COUNT = 0.005698; //0.01284=360/1440/43.8749
 const float LR_JOINT_DEGREES_PER_ENCODER_COUNT = 0.01284; //0.01284=360/1440/19.741
+const float WL_JOINT_DEGREES_PER_ENCODER_COUNT = 0.15; //direct drive optical encoder 360degrees/2400quadppr=0.15
 
 //encoder variables
 /*
@@ -219,8 +226,8 @@ const float LR_JOINT_DEGREES_PER_ENCODER_COUNT = 0.01284; //0.01284=360/1440/19.
 volatile float joint_degrees_per_encoder_count = 1.0;
 
 //motion constants
-const float MAX_VEL = 25.0;   //degrees/sec
-const float MAX_ACCEL = 10.0; //degrees/sec^2
+const float MAX_VEL = 40.0;   //degrees/sec //was 25.0 before WL test rig
+const float MAX_ACCEL = 20.0; //degrees/sec^2 //was 10.0 before WL test rig
 const float MIN_TIME_TO_REACH_MAX_VEL = MAX_VEL / MAX_ACCEL;//in seconds
 const float MIN_TRAVEL_TO_REACH_MAX_VEL = MIN_TIME_TO_REACH_MAX_VEL * ((MAX_VEL + MAX_ACCEL) / 2);
 //const float DEGREES_PER_MICROSTEP = 0.006923;// = 0.03; //= 360 / (STEPPER_STEPS_PER_REV * MICROSTEPS) / GEAR_RATIO;
@@ -232,6 +239,9 @@ const float SL_DEGREES_PER_MICROSTEP = 0.00352;//= (360/GEAR_RATIO)/(STEPPER_STE
 const float UR_DEGREES_PER_MICROSTEP = 0.00452;//= (360/GEAR_RATIO)/(STEPPER_STEPS_PER_REV*MICROSTEPS);
 const float EL_DEGREES_PER_MICROSTEP = 0.0014245;//= (360/GEAR_RATIO)/(STEPPER_STEPS_PER_REV*MICROSTEPS);
 const float LR_DEGREES_PER_MICROSTEP = 0.0035; //= (360/GEAR_RATIO)/(STEPPER_STEPS_PER_REV*MICROSTEPS);
+const float WL_DEGREES_PER_MICROSTEP = 0.01875;  //cycloidal test rig 1st try 12:1 reduction, microsteps=8, =360/(200*8)/12=0.01875?
+//const float WL_DEGREES_PER_MICROSTEP = 0.075;  //cycloidal test rig 1st try 12:1 reduction, microsteps=2, =360/(200*2)/12=0.075
+//const float WL_DEGREES_PER_MICROSTEP = 0.15;  //cycloidal test rig 1st try 12:1 reduction, microsteps=1, =360/(200*1)/12=0.075
 /*
   this is a symetrical n x n array where n is the number of joints
   The joints are in order BR, SL, UR, EL, LR; wherein in BR is the 0th element, SL the 1st and so on.
@@ -242,12 +252,14 @@ const float LR_DEGREES_PER_MICROSTEP = 0.0035; //= (360/GEAR_RATIO)/(STEPPER_STE
   by 0.438 times the change in the SL position
 */
 
-const float JOINT_POSITION_CORRECTION_FACTORS[5][5] = {
-  {0.0, 0.0, 0.0, 0.0, 0.0},
-  {0.0, 0.0, -0.438, 0.319, 0.0},
-  {0.0, -0.438, 0.0, 0.09, 0.0},
-  {0.0, 0.319, 0.09, 0.0, 0.0},
-  {0.0, 0.0, 0.0, 0.0, 0.0}
+const float JOINT_POSITION_CORRECTION_FACTORS[6][6] = {
+  //modified 7/20/18 to add WL with zero correction factors becasue not cable driven in WL_cycloidal test rig
+  {0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+  {0.0, 0.0, -0.438, 0.319, 0.0, 0.0},
+  {0.0, -0.438, 0.0, 0.09, 0.0, 0.0},
+  {0.0, 0.319, 0.09, 0.0, 0.0, 0.0},
+  {0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+  {0.0, 0.0, 0.0, 0.0, 0.0, 0.0}
 };
 
 //torque limits - To Do constants for now, but eventually variables that are function of MoveIt motion plan output
@@ -382,11 +394,11 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
     First token in command message is a message number (int) to determine if command is duplicate that already been processed
     Second token is required duration of movement in (float) seconds
     Subsequent tokens represent commanded position in (float) degrees for each joint
-      in order BR, SL, UR, EL, LR
+      in order BR, SL, UR, EL, LR, WL
   */
   int current_command_number_ = 0;
   static int previous_command_number_ = 0;//unique integer identify this command
-  float commanded_joint_positions_[6];//array holding req'd duration and commanded position in degrees in order: BR,SL,UR,EL,LR
+  float commanded_joint_positions_[7];//array holding req'd duration and commanded position in degrees in order: BR,SL,UR,EL,LR, WL
 
   //parse command
   inbound_message[0] = (char)0;  //"empties inbound_message by setting first char in string to 0
@@ -463,7 +475,9 @@ void commandedJointPositionsCallback(const std_msgs::String& the_command_msg_) {
     case LR_IDENT:
       joint_index = 6;
       break;
-    default:
+    case WL_IDENT:
+      joint_index = 7;
+    break;    default:
       break;
   }//end switch case
 
@@ -548,6 +562,13 @@ ros::Publisher LR_stepper_encoder_pos_pub("LR_stepper_encoder_pos", &stepper_enc
 ros::Publisher LR_torque_pub("LR_torque", &torque);       //BR joint rotation in +/- degrees, to three decimal places. std_msgs/Float32.
 //ros::Publisher BR_joint_state_pub("BR_joint_state", &BR_joint_state);  //sensor_msgs/JointState
 ros::Publisher LR_state_pub("LR_state", &state);        //std_msgs/String. States such cw_endstop_activated, holding_position, moving, unpowered, yellow_torque, red_torque
+
+ros::Publisher WL_joint_encoder_pos_pub("WL_joint_encoder_pos", &joint_encoder_pos);     //WL joint position in +/- degrees, to three decimal places. Stored internally as a long, then converted when published to Float32
+ros::Publisher WL_stepper_count_pos_pub("WL_stepper_count_pos", &stepper_count_pos); //Equivalent WL joint position in +/- degrees, to three decimal places. Store internally as long as stepper_counts
+ros::Publisher WL_stepper_encoder_pos_pub("WL_stepper_encoder_pos", &stepper_encoder_pos); //Equivalent WL joint position in +/- degrees, to three decimal places.
+ros::Publisher WL_torque_pub("WL_torque", &torque);       //WL joint rotation in +/- degrees, to three decimal places. std_msgs/Float32.
+ros::Publisher WL_state_pub("WL_state", &state);        //std_msgs/String. States such cw_endstop_activated, holding_position, moving, unpowered, yellow_torque, red_torque
+
 
 void doEncoder1A() {
   /*  encoder rotation causes encoder pins to change state. this monitors sequence of
@@ -850,9 +871,13 @@ float getCurrentPos ( long encoder_position_ ) {
     Note that degrees of joint position can therefore be positive or negative
     Conversion factor is half of fullscale doe travel
   */
+  /*
+     note there is a spceical temporary case for WL Cycloidal Test Rig to use stepper count position instead of encoder count position unitl encoder is connecte)
+  */
   //To Do - reinstate after calibration routine finished
   //  float float_pos_ = ENCODER_1_DEGREES_PER_COUNT * (encoder_1_pos - (max_doe_counts / 2));
   //float float_pos_ = (float) (ENCODER_1_DEGREES_PER_COUNT * encoder_1_pos);
+  float float_pos_;
 
   noInterrupts();
 
@@ -871,7 +896,13 @@ float getCurrentPos ( long encoder_position_ ) {
   sprintf(miscMsgs5, "getCurrentPos() encoder_position_=%ld", encoder_position_);
   nh.loginfo(miscMsgs5);
   //  float float_pos_ = -1.0 * ((float) encoder_1_pos) * joint_degrees_per_encoder_count;
-  float float_pos_ = -1.0 * ((float) encoder_position_) * joint_degrees_per_encoder_count;
+  if (minion_ident == WL_IDENT) {
+    //SPECIAL CASE OF WL CYCLOIDAL TEST RIG 7/20/18
+    float_pos_ =  stepper_count_pos.data;
+  }
+  else {
+    float_pos_ = -1.0 * ((float) encoder_position_) * joint_degrees_per_encoder_count;
+  }
 
   //debug to do remove
   //  float float_pos_ = 1.01;
@@ -1272,6 +1303,16 @@ void publishAll() {
       LR_state_pub.publish( &state );
       nh.spinOnce();
       break;
+    case WL_IDENT:
+      WL_joint_encoder_pos_pub.publish( &joint_encoder_pos );
+      WL_stepper_count_pos_pub.publish( &stepper_count_pos );
+      nh.spinOnce();
+      WL_stepper_encoder_pos_pub.publish( &stepper_encoder_pos );
+      WL_torque_pub.publish( &torque );
+      //      WL_joint_state_pub.publish( &WL_joint_state );
+      WL_state_pub.publish( &state );
+      nh.spinOnce();
+      break;
     default:
       break;
   }//end switch case
@@ -1381,7 +1422,18 @@ void setup() {
       //      nh.sscribe(LR_plan_sub);
       nh.loginfo("SetupLR");
       break;
-    default:
+    case WL_IDENT:
+      // WL joint
+      joint_degrees_per_encoder_count = WL_JOINT_DEGREES_PER_ENCODER_COUNT;
+      degrees_per_microstep = WL_DEGREES_PER_MICROSTEP;
+      nh.advertise(WL_joint_encoder_pos_pub);
+      nh.advertise(WL_stepper_count_pos_pub);
+      nh.advertise(WL_stepper_encoder_pos_pub);
+      nh.advertise(WL_torque_pub);
+      nh.advertise(WL_state_pub);
+      //      nh.subscribe(WL_plan_sub);
+      nh.loginfo("SetupWL");
+    break;    default:
       break;
   }//end switch case
 
@@ -1422,7 +1474,7 @@ void setup() {
     accel_LUT[i][2] = cum_num_pulses_;
   }
 
-  nh.loginfo("V0.0.22");
+  nh.loginfo("V0.0.23 7/20/18");
 
   nh.spinOnce();
 }// end setup()
