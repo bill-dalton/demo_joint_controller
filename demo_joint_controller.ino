@@ -226,8 +226,8 @@ const float WL_JOINT_DEGREES_PER_ENCODER_COUNT = 0.15; //direct drive optical en
 volatile float joint_degrees_per_encoder_count = 1.0;
 
 //motion constants
-const float MAX_VEL = 40.0;   //degrees/sec //was 25.0 before WL test rig
-const float MAX_ACCEL = 20.0; //degrees/sec^2 //was 10.0 before WL test rig
+const float MAX_VEL = 15.0;   //degrees/sec //was 25.0 before WL test rig
+const float MAX_ACCEL = 5.0; //degrees/sec^2 //was 10.0 before WL test rig
 const float MIN_TIME_TO_REACH_MAX_VEL = MAX_VEL / MAX_ACCEL;//in seconds
 const float MIN_TRAVEL_TO_REACH_MAX_VEL = MIN_TIME_TO_REACH_MAX_VEL * ((MAX_VEL + MAX_ACCEL) / 2);
 //const float DEGREES_PER_MICROSTEP = 0.006923;// = 0.03; //= 360 / (STEPPER_STEPS_PER_REV * MICROSTEPS) / GEAR_RATIO;
