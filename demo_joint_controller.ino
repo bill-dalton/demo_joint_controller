@@ -8,7 +8,7 @@
    It is similar to the BR_Demo_Joint_Controller software for the Arduino Due used for
    the BR joint. Because of the limited RAM and processing speed of the Mega, a simpler
    scheme will be used for accel and decel. Each of the four Megas and the single Due
-   will publish and subscribe ROS topics via USB to the laptop running roscore.
+   will publish and subscribe x ROS topics via USB to the laptop running roscore.
 
    IMPORTANT - DO NOT REUSE char miscMsgs[20] for nh.loginfo. Create a new micsMsgs for each use.
    Otherwise reusing somehow changes the value of my global variables which is VERY hard to debug!
@@ -235,11 +235,11 @@ const float POSITION_HOLD_TOLERANCE = 0.2;    //in degrees
 const long POSITION_ADJUSTMENT_SPEED = 5000;  //stepper period interval speed at which to make position adjustments
 const float RETREAT_DISTANCE = 1.0;           //degrees to retreat
 const long QUEUE_SIZE = 100;//100*8bytes=800 bytes
-const float SL_DEGREES_PER_MICROSTEP = 0.00352;//= (360/GEAR_RATIO)/(STEPPER_STEPS_PER_REV*MICROSTEPS);
-const float UR_DEGREES_PER_MICROSTEP = 0.00452;//= (360/GEAR_RATIO)/(STEPPER_STEPS_PER_REV*MICROSTEPS);
-const float EL_DEGREES_PER_MICROSTEP = 0.0014245;//= (360/GEAR_RATIO)/(STEPPER_STEPS_PER_REV*MICROSTEPS);
-const float LR_DEGREES_PER_MICROSTEP = 0.0035; //= (360/GEAR_RATIO)/(STEPPER_STEPS_PER_REV*MICROSTEPS);
-const float WL_DEGREES_PER_MICROSTEP = 0.01875;  //cycloidal test rig 1st try 12:1 reduction, microsteps=8, =360/(200*8)/12=0.01875?
+static const float SL_DEGREES_PER_MICROSTEP = 0.00352;  //63.915:1 gear ratio April 2019 arm configuration
+static const float UR_DEGREES_PER_MICROSTEP = 0.00452;  //49.770:1 gear ratio April 2019 arm configuration
+static const float EL_DEGREES_PER_MICROSTEP = 0.001246; //180.51:1 gear ratio April 2019 arm configuration
+static const float LR_DEGREES_PER_MICROSTEP = 0.01350;  //16.675:1 gear ratio April 2019 arm configuration
+static const float WL_DEGREES_PER_MICROSTEP = 0.01875;  //12.000:1 gear ratio April 2019 arm configuration
 //const float WL_DEGREES_PER_MICROSTEP = 0.075;  //cycloidal test rig 1st try 12:1 reduction, microsteps=2, =360/(200*2)/12=0.075
 //const float WL_DEGREES_PER_MICROSTEP = 0.15;  //cycloidal test rig 1st try 12:1 reduction, microsteps=1, =360/(200*1)/12=0.075
 /*
@@ -353,7 +353,7 @@ ros::NodeHandle_<ArduinoHardware, 2, 8, 512, 1024> nh;
 
 ////loop timing variables
 volatile unsigned long next_update = 0L;//used to time loop updates
-const unsigned long UPDATE_INTERVAL = 500L;//in milliseconds
+const unsigned long UPDATE_INTERVAL = 10L;//in milliseconds, 500 is 2Hz, 50 is 20Hz, 10 is 100Hz
 volatile unsigned long loop_counter = 0L;
 volatile int int_loop_counter = 0;
 
@@ -1316,7 +1316,7 @@ void publishAll() {
     default:
       break;
   }//end switch case
-}//end updateStatus()
+}//end publishAll()
 
 void setup() {
   // setup, then read, minion identification pins
@@ -1359,7 +1359,7 @@ void setup() {
   //setup publishers and subscribers
   //  nh.getHardware()->setBaud(230400);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
   nh.getHardware()->setBaud(115200);//06Jan2018 lowered to 115200 for compatiblity with simultaneous running of Arduino Due //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
-  //  nh.getHardware()->setBaud(57600);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
+//  nh.getHardware()->setBaud(57600);  //reset to this 1/22/19 for sevon-minio comaptibility - baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
   //    nh.getHardware()->setBaud(9600);  //baud rate for this rosserail_arduino node must match rate for rosserial_python node running in terminal window on laptop
   nh.initNode();
   nh.subscribe(commanded_joint_positions_sub);
